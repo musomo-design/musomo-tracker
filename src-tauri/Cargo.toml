@@ -1,0 +1,24 @@
+[package]
+name = "musomo-tracker"
+version = "1.0.20"
+description = "Musomo Tracker — time tracking & billing"
+authors = ["Musomo"]
+edition = "2021"
+default-run = "musomo-tracker"
+
+[lib]
+name = "musomo_tracker_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri-plugin-dialog = "2"
+dirs = "6"
+image = { version = "0.25", default-features = false, features = ["png", "webp", "jpeg"] }
+base64 = "0.22"
+rusqlite = { version = "0.32", features = ["bundled"] }

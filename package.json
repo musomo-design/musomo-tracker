@@ -1,0 +1,19 @@
+{
+  "name": "musomo-tracker",
+  "private": true,
+  "version": "1.0.20",
+  "type": "module",
+  "scripts": {
+    "sync-version": "node scripts/sync-version.mjs",
+    "i18n:build": "node scripts/build-i18n-bundle.mjs",
+    "predev": "npm run sync-version && npm run i18n:build",
+    "prebuild": "npm run sync-version && npm run i18n:build",
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "stage-dist": "bash scripts/stage-dist.sh"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

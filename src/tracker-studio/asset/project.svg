@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="uuid-1a98ff7a-ae4b-43bd-9834-ba35da417c62" data-name="Layer 2" xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <rect x="4.5" y="17.19" width="55" height="41.25" rx="7.64" ry="7.64" fill="none" stroke="#010101" stroke-width="3"/>
+  <path d="M19.78,17.19v-3.97c0-3.71,3.01-6.72,6.72-6.72h11c3.71,0,6.72,3.01,6.72,6.72h0v3.97" fill="none" stroke="#010101" stroke-linecap="round" stroke-width="3"/>
+  <path d="M22.83,34h18.33" fill="none" stroke="#010101" stroke-linecap="round" stroke-width="3"/>
+</svg>

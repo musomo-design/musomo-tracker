@@ -1,0 +1,31 @@
+[[permission]]
+identifier = "allow-tracker"
+description = "Allows Musomo Tracker commands (timer, persistence, exports, stubs)."
+commands.allow = [
+    "get_system_locale",
+    "update_app_menu",
+    "open_tracker_studio",
+    "open_tracker_mini",
+    "close_tracker_mini",
+    "tracker_notify_mini_action",
+    "tracker_push_timer_state",
+    "tracker_get_timer_state",
+    "tracker_clear_timer_pending_commit",
+    "tracker_init",
+    "tracker_reset_database",
+    "tracker_list_archives",
+    "tracker_restore_archive",
+    "tracker_upsert_client",
+    "tracker_delete_client",
+    "tracker_upsert_project",
+    "tracker_delete_project",
+    "tracker_upsert_task",
+    "tracker_upsert_session",
+    "tracker_delete_session",
+    "tracker_save_settings",
+    "tracker_save_brand_image",
+    "tracker_import_brand_file",
+    "save_downloaded_file",
+    "open_file",
+    "compose_mail_with_attachment"
+]
