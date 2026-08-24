@@ -66,6 +66,11 @@ jobs:
           APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
         run: npm run build
 
+      - name: Notarize and staple DMG
+        env:
+          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
+        run: bash scripts/ci-macos-notarize-dmg.sh
+
       - name: Validate signed and notarized artifacts
         run: bash scripts/ci-macos-validate-artifacts.sh
 

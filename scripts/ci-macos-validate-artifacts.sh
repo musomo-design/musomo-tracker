@@ -44,7 +44,7 @@ echo "==> Gatekeeper assessment (app)"
 spctl -a -vv -t install "$APP_PATH"
 
 echo "==> stapler validate (dmg)"
-staple_if_needed "$DMG_PATH"
+xcrun stapler validate "$DMG_PATH"
 
 echo "==> Gatekeeper assessment (dmg)"
 spctl -a -vv -t install "$DMG_PATH"
