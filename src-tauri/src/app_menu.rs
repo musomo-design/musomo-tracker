@@ -37,18 +37,19 @@ pub fn build_app_menu(
         let builder = builder
             .text("about", lbl(labels, "menuAbout", "About Musomo Tracker"))
             .separator();
-        builder
-            .item(&settings)
-            .item(&language_menu)
+        let builder = builder.item(&settings).item(&language_menu);
+        #[cfg(target_os = "macos")]
+        let builder = builder
             .separator()
             .services()
             .separator()
             .hide()
             .hide_others()
             .show_all()
-            .separator()
-            .quit()
-            .build()?
+            .separator();
+        #[cfg(not(target_os = "macos"))]
+        let builder = builder.separator();
+        builder.quit().build()?
     };
 
     let file_menu = SubmenuBuilder::new(app, lbl(labels, "menuFile", "File"))
