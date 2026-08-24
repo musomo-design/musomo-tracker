@@ -86,12 +86,21 @@
     .mini__status[data-state="running"] { color: var(--accent); }
     .mini__status[data-state="paused"] { color: var(--paused); }
     .mini__status[data-state="stopped"] { color: var(--muted); }
+    .mini__surface {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      flex: 1;
+      min-height: 0;
+    }
     .mini__actions {
       display: flex;
       gap: 6px;
       margin-top: auto;
+      -webkit-app-region: no-drag;
     }
     .mini__actions button {
+      -webkit-app-region: no-drag;
       flex: 1;
       border: 1px solid var(--border);
       background: #1e293b;
@@ -111,12 +120,14 @@
   </style>
 </head>
 <body>
-  <div class="mini" data-tauri-drag-region>
-    <div class="mini__drag" data-tauri-drag-region>Musomo Tracker · Mini</div>
-    <div class="mini__project" id="project">Acme Website Redesign</div>
-    <div class="mini__client" id="client">Acme Corporation</div>
-    <div class="mini__time" id="time">00:00:00</div>
-    <div class="mini__status" id="status" data-state="stopped">Stopped</div>
+  <div class="mini">
+    <div class="mini__surface" data-tauri-drag-region>
+      <div class="mini__drag">Musomo Tracker · Mini</div>
+      <div class="mini__project" id="project">Acme Website Redesign</div>
+      <div class="mini__client" id="client">Acme Corporation</div>
+      <div class="mini__time" id="time">00:00:00</div>
+      <div class="mini__status" id="status" data-state="stopped">Stopped</div>
+    </div>
     <div class="mini__actions">
       <button type="button" id="btnPause">Pause</button>
       <button type="button" id="btnStop">Stop</button>
