@@ -590,6 +590,117 @@ function projectStatusLabel(status) {
   return key ? tr(key) : status;
 }
 
+const PROJECT_STATUS_OPTIONS = [
+  ['active', 'statusActive'],
+  ['review', 'statusReview'],
+  ['on-hold', 'statusOnHold'],
+  ['done', 'statusDone']
+];
+
+const PRIORITY_OPTIONS = [
+  ['low', 'priorityLow'],
+  ['medium', 'priorityMedium'],
+  ['high', 'priorityHigh'],
+  ['urgent', 'priorityUrgent']
+];
+
+function populateSelectOptions(select, entries, selectedValue) {
+  if (!select) return;
+  select.innerHTML = entries
+    .map(([value, labelKey]) => {
+      const selected = selectedValue === value ? ' selected' : '';
+      return `<option value="${escapeHtml(value)}"${selected}>${escapeHtml(tr(labelKey))}</option>`;
+    })
+    .join('');
+}
+
+function priorityLabel(priority) {
+  const map = {
+    low: 'priorityLow',
+    medium: 'priorityMedium',
+    high: 'priorityHigh',
+    urgent: 'priorityUrgent'
+  };
+  const key = map[priority];
+  return key ? tr(key) : priority;
+}
+
+function askCompleteProjectChoice() {
+  return new Promise(resolve => {
+    const modal = $('completeProjectModal');
+    if (!modal) {
+      resolve('keep-tasks');
+      return;
+    }
+    $('completeProjectModalTitle').textContent = tr('completeProjectTitle');
+    $('completeProjectModalBody').textContent = tr('completeProjectBody');
+    $('completeProjectCancel').textContent = tr('cancel');
+    $('completeProjectKeep').textContent = tr('completeProjectKeepTasks');
+    $('completeProjectMove').textContent = tr('completeProjectMoveTasks');
+    modal.hidden = false;
+    const finish = choice => {
+      modal.hidden = true;
+      $('completeProjectCancel').onclick = null;
+      $('completeProjectKeep').onclick = null;
+      $('completeProjectMove').onclick = null;
+      resolve(choice);
+    };
+    $('completeProjectCancel').onclick = () => finish('cancel');
+    $('completeProjectKeep').onclick = () => finish('keep-tasks');
+    $('completeProjectMove').onclick = () => finish('move-tasks');
+  });
+}
+
+async function moveProjectTasksToCompleted(projectId) {
+  for (const task of state.board.items) {
+    if (task.projectId !== projectId || task.column === 'completed') continue;
+    task.column = 'completed';
+    await persistTask(task);
+  }
+}
+
+function syncProjectModalLabels() {
+  const modal = $('projectModal');
+  if (!modal) return;
+  const setLabel = (forId, key) => {
+    const el = modal.querySelector(`label[for="${forId}"]`);
+    if (el) el.textContent = tr(key);
+  };
+  setLabel('pName', 'projectNameLabel');
+  setLabel('pClient', 'client');
+  setLabel('pCategory', 'categoryLabel');
+  setLabel('pEstimated', 'estimatedHours');
+  setLabel('pDeadline', 'deadline');
+  setLabel('pStatus', 'status');
+  const cancelBtn = $('projectModalCancel');
+  if (cancelBtn) cancelBtn.textContent = tr('cancel');
+  const hint = $('projectStatusHint');
+  if (hint) hint.textContent = tr('projectStatusHint');
+}
+
+function syncTaskModalLabels() {
+  const modal = $('taskModal');
+  if (!modal) return;
+  const title = $('taskModalTitle');
+  const subtitle = modal.querySelector('.modal__head p');
+  const saveBtn = $('taskModalSave');
+  const cancelBtn = $('taskModalCancel');
+  if (title) title.textContent = tr('newTaskTitle');
+  if (subtitle) subtitle.textContent = tr('taskModalSubtitle');
+  if (saveBtn) saveBtn.textContent = tr('addTask');
+  if (cancelBtn) cancelBtn.textContent = tr('cancel');
+  const setLabel = (forId, key) => {
+    const el = modal.querySelector(`label[for="${forId}"]`);
+    if (el) el.textContent = tr(key);
+  };
+  setLabel('tTitle', 'taskTitleLabel');
+  setLabel('tProject', 'project');
+  setLabel('tColumn', 'taskColumnLabel');
+  setLabel('tPriority', 'taskPriorityLabel');
+  setLabel('tEstimated', 'estimatedHours');
+  setLabel('tDeadline', 'deadline');
+}
+
 function clientStatusLabel(status, archived) {
   if (archived) return tr('statusArchived');
   const map = {
@@ -2971,12 +3082,11 @@ function openProjectModal(project = null) {
   const saveBtn = $('projectModalSave');
   const subtitle = modal.querySelector('.modal__head p');
   if (title) title.textContent = project ? tr('editProject') : tr('newProjectTitle');
-  if (saveBtn) saveBtn.textContent = project ? 'Save changes' : 'Add project';
+  if (saveBtn) saveBtn.textContent = project ? tr('saveChanges') : tr('addProject');
   if (subtitle) {
-    subtitle.textContent = project
-      ? 'Changes are saved locally on your device.'
-      : 'Add a new project linked to a client.';
+    subtitle.textContent = project ? tr('projectModalSubtitleEdit') : tr('projectModalSubtitleNew');
   }
+  syncProjectModalLabels();
   if (select) {
     const clients = state.clients.items.filter(c => !c.archived);
     select.innerHTML = clients
@@ -2994,6 +3104,7 @@ function openProjectModal(project = null) {
   } else if ($('pStatus')) {
     $('pStatus').value = 'active';
   }
+  populateSelectOptions($('pStatus'), PROJECT_STATUS_OPTIONS, $('pStatus')?.value || 'active');
   modal.hidden = false;
   $('pName')?.focus();
 }
@@ -3018,6 +3129,13 @@ async function saveProject() {
   const estimatedH = Number(fd.get('estimated')) || 20;
   const deadline = String(fd.get('deadline') || '') || new Date().toISOString().slice(0, 10);
   const status = String(fd.get('status') || existing?.status || 'active');
+  if (existing && status === 'done' && existing.status !== 'done') {
+    const choice = await askCompleteProjectChoice();
+    if (choice === 'cancel') return;
+    if (choice === 'move-tasks') {
+      await moveProjectTasksToCompleted(existing.id);
+    }
+  }
   const accents = LOGO_COLORS;
   const project = {
     id: existing?.id || `p${Date.now()}`,
@@ -3044,7 +3162,8 @@ async function saveProject() {
   state.projects.query = '';
   closeProjectModal();
   refreshChrome();
-  if (state.projects.detailId === project.id) setPage('project-detail');
+  if (state.page === 'board') renderBoard();
+  else if (state.projects.detailId === project.id) setPage('project-detail');
   else setPage('projects');
 }
 
@@ -3066,7 +3185,7 @@ function renderTaskCard(task) {
   const dragging = state.board.draggingId === task.id;
   return `<article class="kanban-card${dragging ? ' is-dragging' : ''}" data-task-id="${escapeHtml(task.id)}">
     <div class="kanban-card__top">
-      <span class="priority-pill is-${escapeHtml(task.priority)}">${escapeHtml(task.priority)}</span>
+      <span class="priority-pill is-${escapeHtml(task.priority)}">${escapeHtml(priorityLabel(task.priority))}</span>
       <span class="kanban-card__hours">${escapeHtml(formatMinutes(task.workedMin))} / ${escapeHtml(formatMinutes(task.estimatedMin))}</span>
     </div>
     <h4>${escapeHtml(task.title)}</h4>
@@ -3097,10 +3216,25 @@ function renderBoard() {
 
   const projectOptions = [
     `<option value="all"${state.board.projectFilter === 'all' ? ' selected' : ''}>${tr('allProjects')}</option>`,
-    ...state.projects.items.map(
-      p => `<option value="${escapeHtml(p.id)}"${state.board.projectFilter === p.id ? ' selected' : ''}>${escapeHtml(p.name)}</option>`
-    )
+    ...state.projects.items.map(p => {
+      const suffix = p.status === 'done' ? ` (${tr('statusDone')})` : '';
+      return `<option value="${escapeHtml(p.id)}"${state.board.projectFilter === p.id ? ' selected' : ''}>${escapeHtml(p.name + suffix)}</option>`;
+    })
   ].join('');
+
+  const filteredProject =
+    state.board.projectFilter !== 'all'
+      ? state.projects.items.find(p => p.id === state.board.projectFilter)
+      : null;
+  let boardExtraHint = '';
+  if (filteredProject?.status === 'done') {
+    boardExtraHint = tr('boardProjectCompletedHint');
+  } else if (state.projects.items.length && !state.projects.items.some(p => p.status !== 'done')) {
+    boardExtraHint = tr('boardNoActiveProjects');
+  }
+  const boardHintHtml = boardExtraHint
+    ? `${escapeHtml(tr('boardHelperHint'))}<br>${escapeHtml(boardExtraHint)}`
+    : escapeHtml(tr('boardHelperHint'));
 
   root.innerHTML = `
     <div class="board-panel">
@@ -3110,6 +3244,7 @@ function renderBoard() {
         <button type="button" class="btn" id="btnRefreshBoard" title="${tr('refresh')}">${tr('refresh')}</button>
         <button type="button" class="btn btn-primary" id="btnNewTask">${tr('plusNewTask')}</button>
       </div>
+      <p class="board-hint">${boardHintHtml}</p>
       <div class="kanban" aria-label="Task board">${columns}</div>
     </div>
   `;
@@ -3201,19 +3336,38 @@ function openTaskModal() {
   const modal = $('taskModal');
   const projectSelect = $('tProject');
   const columnSelect = $('tColumn');
+  const saveBtn = $('taskModalSave');
   if (!modal) return;
+  syncTaskModalLabels();
+  const activeProjects = state.projects.items.filter(p => p.status !== 'done');
   if (projectSelect) {
-    projectSelect.innerHTML = state.projects.items
-      .filter(p => p.status !== 'done')
-      .map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`)
-      .join('');
+    if (activeProjects.length) {
+      projectSelect.innerHTML = activeProjects
+        .map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`)
+        .join('');
+      projectSelect.disabled = false;
+    } else {
+      projectSelect.innerHTML = `<option value="">${escapeHtml(tr('boardNoActiveProjects'))}</option>`;
+      projectSelect.disabled = true;
+    }
   }
+  if (saveBtn) saveBtn.disabled = activeProjects.length === 0;
   if (columnSelect) {
     columnSelect.innerHTML = BOARD_COLUMNS.map(
       c => `<option value="${escapeHtml(c.id)}">${escapeHtml(tr(c.labelKey))}</option>`
     ).join('');
   }
+  populateSelectOptions($('tPriority'), PRIORITY_OPTIONS, 'medium');
   $('taskForm')?.reset();
+  if (columnSelect) columnSelect.value = 'todo';
+  if ($('tPriority')) $('tPriority').value = 'medium';
+  if (projectSelect && activeProjects.length) {
+    const preferred =
+      state.board.projectFilter !== 'all' && activeProjects.some(p => p.id === state.board.projectFilter)
+        ? state.board.projectFilter
+        : activeProjects[0].id;
+    projectSelect.value = preferred;
+  }
   modal.hidden = false;
   $('tTitle')?.focus();
 }

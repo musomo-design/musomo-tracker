@@ -1419,6 +1419,14 @@
       color: var(--text);
       font-size: var(--text-label-size);
     }
+    .board-hint {
+      margin: 0;
+      padding: 0 16px 12px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      border-bottom: 1px solid var(--border-soft);
+    }
     .kanban {
       display: flex;
       gap: 12px;
@@ -2415,21 +2423,35 @@
           </div>
         </div>
         <div class="field">
-          <label for="pStatus">Status</label>
+          <label for="pStatus" id="pStatusLabel">Status</label>
           <select id="pStatus" name="status">
             <option value="active">Active</option>
             <option value="review">In review</option>
             <option value="on-hold">On hold</option>
             <option value="done">Done</option>
           </select>
+          <p class="hint" id="projectStatusHint"></p>
         </div>
       </form>
       <div class="modal__foot">
         <button type="button" class="btn" id="projectModalCancel">Cancel</button>
         <button type="button" class="btn btn-primary" id="projectModalSave">Add project</button>
       </div>
+      </div>
     </div>
   </div>
+  <div class="modal-backdrop" id="completeProjectModal" hidden>
+    <div class="modal" role="dialog" aria-labelledby="completeProjectModalTitle">
+      <div class="modal__head">
+        <h2 id="completeProjectModalTitle">Complete project?</h2>
+        <p id="completeProjectModalBody"></p>
+      </div>
+      <div class="modal__foot">
+        <button type="button" class="btn" id="completeProjectCancel">Cancel</button>
+        <button type="button" class="btn" id="completeProjectKeep">Leave tasks as they are</button>
+        <button type="button" class="btn btn-primary" id="completeProjectMove">Move all tasks to Completed</button>
+      </div>
+    </div>
   </div>
   <div class="modal-backdrop" id="taskModal" hidden>
     <div class="modal" role="dialog" aria-labelledby="taskModalTitle">
@@ -2608,6 +2630,6 @@
   <script src="../version.js"></script>
   <script src="../i18n/locales.js"></script>
   <script src="../i18n/runtime.js"></script>
-  <script src="./app.js?v=1.0.20"></script>
+  <script src="./app.js?v=1.0.21"></script>
 </body>
 </html>
