@@ -3,8 +3,8 @@ $ErrorActionPreference = "Stop"
 
 $expectedVersion = "1.0.20"
 $bundleDir = Join-Path $PSScriptRoot ".." "src-tauri" "target" "release" "bundle"
+$releaseDir = Join-Path $PSScriptRoot ".." "src-tauri" "target" "release"
 $nsisDir = Join-Path $bundleDir "nsis"
-$exeDir = Join-Path $bundleDir "exe"
 
 Write-Host "Validating Windows build artifacts..."
 Write-Host "Bundle root: $bundleDir"
@@ -38,12 +38,14 @@ if ($installer.Name -notmatch $expectedVersion) {
   throw "Installer name does not include version $expectedVersion : $($installer.Name)"
 }
 
-$appExe = Get-ChildItem -Path $exeDir -Filter "*.exe" -File -ErrorAction SilentlyContinue |
-  Where-Object { $_.Name -notmatch "setup" } |
-  Select-Object -First 1
+$appExe = @(
+  Get-ChildItem -Path (Join-Path $bundleDir "exe") -Filter "*.exe" -File -ErrorAction SilentlyContinue
+  Get-ChildItem -Path $releaseDir -Filter "musomo-tracker.exe" -File -ErrorAction SilentlyContinue
+  Get-ChildItem -Path $releaseDir -Filter "Musomo Tracker.exe" -File -ErrorAction SilentlyContinue
+) | Where-Object { $_ -and $_.Name -notmatch "setup" } | Select-Object -First 1
 
 if (-not $appExe) {
-  throw "Application executable not found in $exeDir"
+  throw "Application executable not found under $releaseDir or bundle/exe"
 }
 
 Write-Host "Application exe: $($appExe.FullName)"
