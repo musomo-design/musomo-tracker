@@ -123,4 +123,4 @@ To the authors of the open-source components listed above: thank you for making
 your work available under permissive licenses.
 
 If you believe a component or license notice is missing or incorrect, please
-contact Musomo via https://musomo.net/musomo-tracker/
+contact Musomo via https://tracker.musomo.net/

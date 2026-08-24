@@ -4,7 +4,7 @@
  */
 
 const MUSOMO_URLS = {
-  website: 'https://musomo.net/musomo-tracker/',
+  website: 'https://tracker.musomo.net/',
   support: 'https://ko-fi.com/musomo'
 };
 

@@ -13,7 +13,12 @@
 </p>
 
 <p align="center">
-  <a href="https://musomo.net/musomo-tracker/">Website</a> ·
+  <strong>Official website:</strong> <a href="https://tracker.musomo.net/">https://tracker.musomo.net/</a><br />
+  <strong>Downloads:</strong> <a href="https://tracker.musomo.net/#download">https://tracker.musomo.net/#download</a>
+</p>
+
+<p align="center">
+  <a href="https://tracker.musomo.net/">Website</a> ·
   <a href="https://ko-fi.com/musomo">Support Musomo</a> ·
   <a href="https://github.com/musomo-design/musomo-tracker">Repository</a>
 </p>
@@ -93,7 +98,7 @@ Always-on-top window for tracking time while working in other apps. Stays in syn
 
 ## Installation (macOS)
 
-1. Download the release from [musomo.net/musomo-tracker/](https://musomo.net/musomo-tracker/)
+1. Download the release from [tracker.musomo.net/#download](https://tracker.musomo.net/#download)
 2. Open the DMG and drag **Musomo Tracker** to Applications
 3. Launch the app — demo data loads on first run (replaceable in Settings)
 
@@ -139,7 +144,8 @@ English, Italiano, Español, Français, Deutsch — system default or override i
 
 ## Links
 
-- **Website:** https://musomo.net/musomo-tracker/
+- **Official website:** https://tracker.musomo.net/
+- **Downloads:** https://tracker.musomo.net/#download
 - **Support Musomo:** https://ko-fi.com/musomo
 - **Repository:** https://github.com/musomo-design/musomo-tracker
 

@@ -3,7 +3,7 @@
 **Last updated:** August 2026  
 **Product:** Musomo Tracker  
 **Publisher:** Musomo  
-**Website:** https://musomo.net/musomo-tracker/
+**Website:** https://tracker.musomo.net/
 
 This policy describes how Musomo Tracker handles information based on the
 current behavior of the application (version 1.0.20). It reflects what the
@@ -108,4 +108,4 @@ information will be updated accordingly.
 
 ## Contact
 
-Musomo — https://musomo.net/musomo-tracker/
+Musomo — https://tracker.musomo.net/

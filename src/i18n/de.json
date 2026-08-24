@@ -200,7 +200,7 @@
   "helpSectionLocalDataTitle": "Lokale Daten",
   "helpSectionLocalDataBody": "Alle Daten werden lokal in SQLite auf Ihrem Gerät gespeichert. Kein Cloud-Konto erforderlich.",
   "privacyTitle": "Datenschutz",
-  "privacyBody": "Musomo Tracker verwendet keine Cloud-Konten, Analytics oder Telemetrie. Die App sendet Ihre Daten nicht automatisch an Musomo.\n\nKunden, Projekte, Aufgaben und Sitzungen werden in einer lokalen SQLite-Datenbank gespeichert. Logos, Avatare und Backups bleiben auf dem Gerät.\n\nPDF- und Excel-Exporte werden im Download-Ordner gespeichert. Bericht senden unter macOS öffnet die lokale Mail-App mit Anhang — keine E-Mail wird automatisch gesendet.\n\nSie sind für die personenbezogenen Daten verantwortlich, die Sie zu Ihren Kunden eingeben.\n\nWeitere Informationen: https://musomo.net/musomo-tracker/",
+  "privacyBody": "Musomo Tracker verwendet keine Cloud-Konten, Analytics oder Telemetrie. Die App sendet Ihre Daten nicht automatisch an Musomo.\n\nKunden, Projekte, Aufgaben und Sitzungen werden in einer lokalen SQLite-Datenbank gespeichert. Logos, Avatare und Backups bleiben auf dem Gerät.\n\nPDF- und Excel-Exporte werden im Download-Ordner gespeichert. Bericht senden unter macOS öffnet die lokale Mail-App mit Anhang — keine E-Mail wird automatisch gesendet.\n\nSie sind für die personenbezogenen Daten verantwortlich, die Sie zu Ihren Kunden eingeben.\n\nWeitere Informationen: https://tracker.musomo.net/",
   "settingsSaved": "Einstellungen gespeichert.",
   "previewNotReady": "Vorschau nicht bereit. Zuerst Vorschau erzeugen.",
   "noOtherProjects": "Keine anderen Projekte",

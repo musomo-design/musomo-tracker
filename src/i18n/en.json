@@ -200,7 +200,7 @@
   "helpSectionLocalDataTitle": "Local Data",
   "helpSectionLocalDataBody": "All data is stored locally in SQLite on your device. No cloud account is required.",
   "privacyTitle": "Privacy",
-  "privacyBody": "Musomo Tracker does not use cloud accounts, analytics, or telemetry. The app does not automatically send your data to Musomo.\n\nClients, projects, tasks, and time sessions are stored in a local SQLite database. Studio logos, avatars, and backups are stored locally on your device.\n\nPDF and Excel exports are saved to your Downloads folder. Send Report on macOS opens your local Mail app with an attachment — no email is sent automatically.\n\nYou are responsible for the personal data you enter about your clients.\n\nMore information: https://musomo.net/musomo-tracker/",
+  "privacyBody": "Musomo Tracker does not use cloud accounts, analytics, or telemetry. The app does not automatically send your data to Musomo.\n\nClients, projects, tasks, and time sessions are stored in a local SQLite database. Studio logos, avatars, and backups are stored locally on your device.\n\nPDF and Excel exports are saved to your Downloads folder. Send Report on macOS opens your local Mail app with an attachment — no email is sent automatically.\n\nYou are responsible for the personal data you enter about your clients.\n\nMore information: https://tracker.musomo.net/",
   "settingsSaved": "Settings saved.",
   "previewNotReady": "Preview not ready. Click Generate preview first.",
   "noOtherProjects": "No other projects",
