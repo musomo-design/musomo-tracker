@@ -14,7 +14,12 @@ pub fn system_locale_code() -> String {
     }
     let text = String::from_utf8_lossy(&output.stdout);
     for line in text.lines() {
-        let token = line.trim().trim_matches(|c| c == '(' || c == ')' || c == '"');
+        let token = line
+            .trim()
+            .trim_matches(|c| matches!(c, '(' | ')' | '"' | ',' | ';'));
+        if token.is_empty() {
+            continue;
+        }
         if let Some(code) = normalize_locale_code(token) {
             return code;
         }
