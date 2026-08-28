@@ -286,11 +286,98 @@ fn open_file(path: String) -> Result<(), String> {
     }
 }
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+pub struct AppExitGuard(pub AtomicBool);
+
+#[tauri::command]
+fn allow_app_exit(app: tauri::AppHandle) -> Result<(), String> {
+    app.state::<AppExitGuard>()
+        .0
+        .store(true, Ordering::SeqCst);
+    app.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
+async fn tracker_confirm_dialog(
+    app: tauri::AppHandle,
+    message: String,
+    title: String,
+) -> Result<bool, String> {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+
+    let (tx, mut rx) = tauri::async_runtime::channel::<bool>(1);
+    let dialog_title = if title.trim().is_empty() {
+        "Musomo Tracker".to_string()
+    } else {
+        title
+    };
+    app.dialog()
+        .message(message)
+        .title(dialog_title)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancel)
+        .show(move |ok| {
+            let _ = tx.blocking_send(ok);
+        });
+    Ok(rx.recv().await.unwrap_or(false))
+}
+
+#[tauri::command]
+async fn tracker_session_close_dialog(
+    app: tauri::AppHandle,
+    title: String,
+    save_close: String,
+    save_pause: String,
+    dont_save: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::{
+        DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
+    };
+
+    let (tx, mut rx) = tauri::async_runtime::channel::<Option<String>>(1);
+    let dialog_title = if title.trim().is_empty() {
+        "Musomo Tracker".to_string()
+    } else {
+        title
+    };
+    app.dialog()
+        .message("")
+        .title(dialog_title)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::YesNoCancelCustom(
+            save_close.clone(),
+            save_pause.clone(),
+            dont_save.clone(),
+        ))
+        .show_with_result(move |res| {
+            let choice = match res {
+                MessageDialogResult::Custom(label) if label == save_close => {
+                    Some("save_close".to_string())
+                }
+                MessageDialogResult::Custom(label) if label == save_pause => {
+                    Some("save_pause".to_string())
+                }
+                MessageDialogResult::Custom(label) if label == dont_save => {
+                    Some("discard".to_string())
+                }
+                MessageDialogResult::Yes => Some("save_close".to_string()),
+                MessageDialogResult::No => Some("save_pause".to_string()),
+                MessageDialogResult::Cancel => Some("discard".to_string()),
+                _ => None,
+            };
+            let _ = tx.blocking_send(choice);
+        });
+    Ok(rx.recv().await.unwrap_or(None))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            app.manage(AppExitGuard(AtomicBool::new(false)));
             app.manage(tracker_studio::TimerRuntimeStore::new());
             #[cfg(desktop)]
             {
@@ -315,6 +402,7 @@ pub fn run() {
             tracker_studio::tracker_push_timer_state,
             tracker_studio::tracker_get_timer_state,
             tracker_studio::tracker_clear_timer_pending_commit,
+            tracker_studio::tracker_discard_open_timer,
             tracker_studio::tracker_init,
             tracker_studio::tracker_reset_database,
             tracker_studio::tracker_list_archives,
@@ -333,7 +421,30 @@ pub fn run() {
             open_url,
             open_file,
             compose_mail_with_attachment,
+            allow_app_exit,
+            tracker_confirm_dialog,
+            tracker_session_close_dialog,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Musomo Tracker");
+        .build(tauri::generate_context!())
+        .expect("error while building Musomo Tracker")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                if app_handle
+                    .state::<AppExitGuard>()
+                    .0
+                    .load(Ordering::SeqCst)
+                {
+                    return;
+                }
+                if tracker_studio::TimerRuntimeStore::has_running_open_timer(&app_handle) {
+                    api.prevent_exit();
+                    use tauri::{Emitter, Manager};
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        let _ = window.emit("app-exit-requested", ());
+                    } else if let Some(window) = app_handle.get_webview_window("tracker-mini") {
+                        let _ = window.emit("app-exit-requested", ());
+                    }
+                }
+            }
+        });
 }

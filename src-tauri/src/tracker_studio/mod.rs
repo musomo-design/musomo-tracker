@@ -63,6 +63,11 @@ pub fn close_tracker_mini(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn tracker_discard_open_timer(app: tauri::AppHandle) -> Result<(), String> {
+    TimerRuntimeStore::discard_open_timer(&app)
+}
+
+#[tauri::command]
 pub fn tracker_init() -> Result<TrackerSnapshot, String> {
     db::load_snapshot()
 }
@@ -156,6 +161,13 @@ fn open_tracker_studio_window(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn minimize_main_window(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window(MAIN_LABEL) {
+        let _ = window.minimize();
+    }
+}
+
 fn open_tracker_mini_window(app: &tauri::AppHandle) -> Result<(), String> {
     use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -164,6 +176,7 @@ fn open_tracker_mini_window(app: &tauri::AppHandle) -> Result<(), String> {
         window.unminimize().map_err(|e| e.to_string())?;
         window.set_focus().map_err(|e| e.to_string())?;
         let _ = window.set_always_on_top(true);
+        minimize_main_window(app);
         return Ok(());
     }
 
@@ -180,5 +193,6 @@ fn open_tracker_mini_window(app: &tauri::AppHandle) -> Result<(), String> {
     .build()
     .map_err(|e| e.to_string())?;
 
+    minimize_main_window(app);
     Ok(())
 }

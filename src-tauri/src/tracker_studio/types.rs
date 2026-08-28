@@ -140,6 +140,23 @@ pub struct TrackerModuleSettings {
     #[serde(default = "default_currency_eur")]
     pub currency: String,
     pub report_footer: String,
+    /// Optional HTML/text under the print logo on page 1 (email, phone, VAT…).
+    #[serde(default)]
+    pub report_header_note: String,
+    /// Main app appearance: "light" or "dark" (mini timer stays dark).
+    #[serde(default = "default_ui_theme_dark")]
+    pub ui_theme: String,
+    /// Display dates: "european" (DD/MM/YYYY) or "american" (MM/DD/YYYY). Storage stays ISO.
+    #[serde(default = "default_date_format_european")]
+    pub date_format: String,
+}
+
+fn default_date_format_european() -> String {
+    "european".into()
+}
+
+fn default_ui_theme_dark() -> String {
+    "dark".into()
 }
 
 fn default_currency_eur() -> String {

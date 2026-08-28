@@ -101,6 +101,38 @@ impl TimerRuntimeStore {
         Ok(())
     }
 
+    pub fn discard_open_timer(app: &AppHandle) -> Result<(), String> {
+        let store = app.state::<TimerRuntimeStore>();
+        let mut state = store.0.lock().map_err(|e| e.to_string())?;
+        *state = TimerRuntimeState::default();
+        Self::persist(&state);
+        Self::broadcast(app, &state);
+        Ok(())
+    }
+
+    fn has_active_open(state: &TimerRuntimeState) -> bool {
+        if state
+            .pending_commit
+            .as_ref()
+            .is_some_and(|pending| pending.secs > 0)
+        {
+            return true;
+        }
+        state.running || Self::live_seconds(state) > 0 || !state.day_start.is_empty()
+    }
+
+    pub fn has_active_open_timer(app: &AppHandle) -> bool {
+        let store = app.state::<TimerRuntimeStore>();
+        let state = store.0.lock().expect("timer runtime lock");
+        Self::has_active_open(&state)
+    }
+
+    pub fn has_running_open_timer(app: &AppHandle) -> bool {
+        let store = app.state::<TimerRuntimeStore>();
+        let state = store.0.lock().expect("timer runtime lock");
+        state.running
+    }
+
     pub fn merge_from_studio(app: &AppHandle, value: Value) -> Result<(), String> {
         let store = app.state::<TimerRuntimeStore>();
         let mut state = store.0.lock().map_err(|e| e.to_string())?;

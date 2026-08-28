@@ -160,7 +160,7 @@ fn snapshot_from_conn(conn: &Connection) -> Result<TrackerSnapshot, String> {
     let inherited = TrackerInheritedSettings {
         language: "English".into(),
         currency: settings.currency.clone(),
-        date_format: "DD/MM/YYYY".into(),
+        date_format: inherited_date_format_label(&settings.date_format),
         time_format: "24-hour".into(),
         theme: "Light".into(),
     };
@@ -421,6 +421,26 @@ fn demo_settings() -> TrackerModuleSettings {
         default_rate: 75.0,
         currency: "EUR".into(),
         report_footer: "Thank you for your business. Payment due within 30 days.".into(),
+        report_header_note: String::new(),
+        ui_theme: "dark".into(),
+        date_format: "european".into(),
+    }
+}
+
+fn normalize_date_format(value: &str) -> String {
+    let v = value.trim().to_lowercase();
+    if v == "american" || v == "mm/dd/yyyy" || v == "mdy" || v == "us" {
+        "american".into()
+    } else {
+        "european".into()
+    }
+}
+
+fn inherited_date_format_label(value: &str) -> String {
+    if normalize_date_format(value) == "american" {
+        "MM/DD/YYYY".into()
+    } else {
+        "DD/MM/YYYY".into()
     }
 }
 
@@ -976,6 +996,9 @@ fn load_module_settings(conn: &Connection) -> Result<TrackerModuleSettings, Stri
         default_rate: 75.0,
         currency: "EUR".into(),
         report_footer: "Thank you for your business.".into(),
+        report_header_note: String::new(),
+        ui_theme: "dark".into(),
+        date_format: "european".into(),
     };
     let mut stmt = conn
         .prepare("SELECT key, value FROM settings")
@@ -999,6 +1022,12 @@ fn load_module_settings(conn: &Connection) -> Result<TrackerModuleSettings, Stri
                 }
             }
             "report_footer" => settings.report_footer = value,
+            "report_header_note" => settings.report_header_note = value,
+            "ui_theme" => {
+                let t = value.trim().to_lowercase();
+                settings.ui_theme = if t == "dark" { "dark".into() } else { "light".into() };
+            }
+            "date_format" => settings.date_format = normalize_date_format(&value),
             _ => {}
         }
     }
@@ -1244,6 +1273,9 @@ fn save_module_settings(conn: &Connection, settings: &TrackerModuleSettings) -> 
         ("default_rate", &settings.default_rate.to_string()),
         ("currency", settings.currency.as_str()),
         ("report_footer", settings.report_footer.as_str()),
+        ("report_header_note", settings.report_header_note.as_str()),
+        ("ui_theme", settings.ui_theme.as_str()),
+        ("date_format", settings.date_format.as_str()),
     ];
     for (key, value) in pairs {
         conn.execute(

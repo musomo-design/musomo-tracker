@@ -42,11 +42,14 @@ window.MUSOMO_APP_VERSION = ${JSON.stringify(version)};
 `;
 fs.writeFileSync(path.join(root, 'src', 'version.js'), versionJs);
 
-// Cache-bust query strings in HTML
+// Cache-bust query strings in HTML + sidebar version badge fallback
 for (const rel of ['src/tracker-studio/index.html', 'src/tracker-studio/mini.html']) {
   const htmlPath = path.join(root, rel);
   let html = fs.readFileSync(htmlPath, 'utf8');
   html = html.replace(/\?v=[0-9.]+/g, `?v=${version}`);
+  if (rel.endsWith('index.html')) {
+    html = html.replace(/id="appVersionBadge">v[0-9.]+</, `id="appVersionBadge">v${version}<`);
+  }
   fs.writeFileSync(htmlPath, html);
 }
 

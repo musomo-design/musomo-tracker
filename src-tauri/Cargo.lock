@@ -1845,7 +1845,7 @@ dependencies = [
 
 [[package]]
 name = "musomo-tracker"
-version = "1.0.21"
+version = "1.0.34"
 dependencies = [
  "base64 0.22.1",
  "dirs",

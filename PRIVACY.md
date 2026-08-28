@@ -6,7 +6,7 @@
 **Website:** https://tracker.musomo.net/
 
 This policy describes how Musomo Tracker handles information based on the
-current behavior of the application (version 1.0.20). It reflects what the
+current behavior of the application (version 1.1.0). It reflects what the
 software actually does today, not planned future features.
 
 ## Summary

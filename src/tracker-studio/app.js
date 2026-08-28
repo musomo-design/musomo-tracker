@@ -436,7 +436,10 @@ const state = {
     displayName: 'Alex',
     defaultRate: 75,
     currency: 'EUR',
-    reportFooter: 'Thank you for your business. Payment due within 30 days.'
+    reportFooter: 'Thank you for your business. Payment due within 30 days.',
+    reportHeaderNote: '',
+    uiTheme: 'dark',
+    dateFormat: 'european'
   },
   inherited: {
     language: 'English',
@@ -512,6 +515,71 @@ function normalizeCurrency(code) {
   return CURRENCY_OPTIONS.includes(c) ? c : '';
 }
 
+const UI_THEME_KEY = 'musomo-ui-theme';
+
+function normalizeUiTheme(value) {
+  return String(value || '').trim().toLowerCase() === 'dark' ? 'dark' : 'light';
+}
+
+function applyUiTheme(theme) {
+  const t = normalizeUiTheme(theme);
+  document.documentElement.dataset.uiTheme = t;
+  state.settings.uiTheme = t;
+  try {
+    localStorage.setItem(UI_THEME_KEY, t);
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+function normalizeDateFormat(value) {
+  const v = String(value || '').trim().toLowerCase();
+  if (v === 'american' || v === 'mm/dd/yyyy' || v === 'mdy' || v === 'us') return 'american';
+  return 'european';
+}
+
+function dateFormatDisplayLabel(fmt = state.settings.dateFormat) {
+  return normalizeDateFormat(fmt) === 'american' ? 'MM/DD/YYYY' : 'DD/MM/YYYY';
+}
+
+function applyDateFormat(fmt) {
+  const f = normalizeDateFormat(fmt);
+  state.settings.dateFormat = f;
+  state.inherited.dateFormat = dateFormatDisplayLabel(f);
+}
+
+function isoDateParts(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return { y: value.getFullYear(), m: value.getMonth() + 1, d: value.getDate() };
+  }
+  const raw = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [y, m, d] = raw.split('-').map(Number);
+    return { y, m, d };
+  }
+  return null;
+}
+
+function formatDisplayDate(value) {
+  const parts = isoDateParts(value);
+  if (!parts) {
+    const raw = String(value || '').trim();
+    return raw || formatDisplayDate(new Date());
+  }
+  const dd = String(parts.d).padStart(2, '0');
+  const mm = String(parts.m).padStart(2, '0');
+  const yyyy = parts.y;
+  if (normalizeDateFormat(state.settings.dateFormat) === 'american') {
+    return `${mm}/${dd}/${yyyy}`;
+  }
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+function refreshAfterDateFormatChange() {
+  refreshChrome();
+  setPage(state.page);
+}
+
 function getStudioCurrency() {
   return normalizeCurrency(state.settings.currency) || 'EUR';
 }
@@ -573,9 +641,7 @@ function formatMinutes(totalMin) {
 
 function formatDeadline(iso) {
   if (!iso) return '—';
-  const d = new Date(`${iso}T12:00:00`);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return formatDisplayDate(iso);
 }
 
 function projectStatusLabel(status) {
@@ -1405,10 +1471,10 @@ function renderSessionBlock(period, label) {
             </div>
             <div class="session-row__right">
               ${escapeHtml(formatHmsDisplay(sessionDurationSec(s)))}<br>${escapeHtml(formatMoney(s.cost, currencyForSession(s)))}
-              <div class="session-row__actions">
-                <button type="button" class="btn-link" data-session-action="edit" data-session-id="${escapeHtml(s.id)}">${tr('edit')}</button>
-                <button type="button" class="btn-link" data-session-action="move" data-session-id="${escapeHtml(s.id)}">${tr('move')}</button>
-                <button type="button" class="btn-link" data-session-action="delete" data-session-id="${escapeHtml(s.id)}">${tr('delete')}</button>
+              <div class="session-row__actions session-actions">
+                <button type="button" class="btn" data-session-action="edit" data-session-id="${escapeHtml(s.id)}">${tr('edit')}</button>
+                <button type="button" class="btn" data-session-action="move" data-session-id="${escapeHtml(s.id)}">${tr('move')}</button>
+                <button type="button" class="btn" data-session-action="delete" data-session-id="${escapeHtml(s.id)}">${tr('delete')}</button>
               </div>
             </div>
           </div>`
@@ -1510,8 +1576,18 @@ function applySnapshot(snap) {
     state.settings.defaultRate = snap.settings.defaultRate;
     if (snap.settings.currency) state.settings.currency = normalizeCurrency(snap.settings.currency) || state.settings.currency;
     state.settings.reportFooter = snap.settings.reportFooter;
+    state.settings.reportHeaderNote = snap.settings.reportHeaderNote || '';
+    if (snap.settings.uiTheme != null) {
+      applyUiTheme(snap.settings.uiTheme);
+    }
+    if (snap.settings.dateFormat != null) {
+      applyDateFormat(snap.settings.dateFormat);
+    }
   }
-  if (snap.inherited) state.inherited = { ...snap.inherited };
+  if (snap.inherited) {
+    state.inherited = { ...snap.inherited };
+    state.inherited.dateFormat = dateFormatDisplayLabel(state.settings.dateFormat);
+  }
   pruneOrphanedData();
   reconcileProjectStatusesFromBoard();
   state.timer.projectId = preferredActiveProjectId();
@@ -1649,7 +1725,10 @@ async function persistSettings() {
         displayName: state.settings.displayName || 'there',
         defaultRate: state.settings.defaultRate,
         currency: getStudioCurrency(),
-        reportFooter: state.settings.reportFooter
+        reportFooter: state.settings.reportFooter,
+        reportHeaderNote: state.settings.reportHeaderNote || '',
+        uiTheme: normalizeUiTheme(state.settings.uiTheme),
+        dateFormat: normalizeDateFormat(state.settings.dateFormat)
       }
     });
     // Keep in-memory logos (files are source of truth; DB no longer stores blobs).
@@ -1660,6 +1739,9 @@ async function persistSettings() {
       state.settings.defaultRate = saved.defaultRate ?? state.settings.defaultRate;
       if (saved.currency) state.settings.currency = normalizeCurrency(saved.currency) || state.settings.currency;
       state.settings.reportFooter = saved.reportFooter ?? state.settings.reportFooter;
+      state.settings.reportHeaderNote = saved.reportHeaderNote ?? state.settings.reportHeaderNote;
+      if (saved.uiTheme != null) applyUiTheme(saved.uiTheme);
+      if (saved.dateFormat != null) applyDateFormat(saved.dateFormat);
       state.inherited.currency = getStudioCurrency();
       if (saved.logoDataUrl) state.settings.logoDataUrl = saved.logoDataUrl;
       if (saved.avatarDataUrl) state.settings.avatarDataUrl = saved.avatarDataUrl;
@@ -3861,17 +3943,7 @@ async function saveManualEntry() {
 }
 
 function formatReportDate(value) {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    const dd = String(value.getDate()).padStart(2, '0');
-    const mm = String(value.getMonth() + 1).padStart(2, '0');
-    return `${dd}/${mm}/${value.getFullYear()}`;
-  }
-  const raw = String(value || '').trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-    const [y, m, d] = raw.split('-');
-    return `${d}/${m}/${y}`;
-  }
-  return raw || formatReportDate(new Date());
+  return formatDisplayDate(value);
 }
 
 function reportPeriodLabel() {
@@ -4227,6 +4299,48 @@ function projectsForReportFilter() {
   return state.projects.items.filter(p => p.clientId === state.reports.clientId);
 }
 
+function sanitizeReportHtml(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  if (!/<[a-z][\s\S]*>/i.test(s)) {
+    return escapeHtml(s).replace(/\n/g, '<br>');
+  }
+  const doc = new DOMParser().parseFromString(s, 'text/html');
+  const allowed = new Set(['BR', 'B', 'STRONG', 'I', 'EM', 'A', 'SPAN', 'P', 'DIV', 'SMALL']);
+  const walk = node => {
+    [...node.childNodes].forEach(child => {
+      if (child.nodeType !== Node.ELEMENT_NODE) return;
+      if (!allowed.has(child.tagName)) {
+        child.replaceWith(doc.createTextNode(child.textContent || ''));
+        return;
+      }
+      [...child.attributes].forEach(attr => {
+        const name = attr.name.toLowerCase();
+        if (child.tagName === 'A' && name === 'href') {
+          const href = String(attr.value || '').trim();
+          if (!/^(https?:|mailto:|tel:)/i.test(href)) child.removeAttribute('href');
+          return;
+        }
+        if (name === 'class') return;
+        child.removeAttribute(attr.name);
+      });
+      walk(child);
+    });
+  };
+  walk(doc.body);
+  return doc.body.innerHTML.trim();
+}
+
+function reportHeaderNoteHtml() {
+  const html = sanitizeReportHtml(state.settings.reportHeaderNote);
+  return html ? `<div class="report-header__note">${html}</div>` : '';
+}
+
+function reportFooterNoteHtml() {
+  const html = sanitizeReportHtml(state.settings.reportFooter);
+  return html ? `<div class="footer__note">${html}</div>` : '';
+}
+
 function reportTemplateCss() {
   return `
     :root {
@@ -4255,13 +4369,27 @@ function reportTemplateCss() {
     }
     .page {
       width: min(1120px, calc(100vw - 56px));
-      min-height: 792px;
+      height: 794px;
+      min-height: 794px;
+      max-height: 794px;
       margin: 0 auto;
       background: var(--page-bg);
       border: none;
       padding: 28px 30px 22px;
       display: flex;
       flex-direction: column;
+      overflow: hidden;
+    }
+    .report-document .page + .page { margin-top: 18px; }
+    .report-header--compact {
+      margin-bottom: 14px;
+      gap: 6px;
+    }
+    .report-header__subtitle {
+      text-align: center;
+      font-size: 11px;
+      color: var(--muted);
+      font-weight: 400;
     }
     .report-header {
       display: flex;
@@ -4281,6 +4409,19 @@ function reportTemplateCss() {
       align-items: flex-start;
       gap: 24px;
     }
+    .report-header__brand {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 0;
+      max-width: 280px;
+    }
+    .report-header__note {
+      font-size: 10px;
+      line-height: 1.45;
+      color: var(--muted);
+    }
+    .report-header__note a { color: inherit; }
     .logo-box {
       width: auto;
       max-width: 200px;
@@ -4320,18 +4461,30 @@ function reportTemplateCss() {
     }
     .meta dt { font-style: italic; font-weight: 400; font-size: 12px; }
     .meta dd { margin: 0; min-height: 16px; font-size: 12px; font-weight: 400; }
-    table { width: 100%; border-collapse: collapse; font-size: 10px; }
+    table { width: 100%; border-collapse: collapse; font-size: 10px; table-layout: fixed; }
+    .col-date { width: 9%; }
+    .col-time { width: 7%; }
+    .col-pause { width: 6%; }
+    .col-desc { width: 42%; }
+    .col-num { width: 9%; }
     thead th {
       background: var(--table-head);
-      padding: 8px 10px;
+      padding: 6px 5px;
       text-align: left;
       font-weight: 500;
       font-size: 10px;
       white-space: nowrap;
     }
-    tbody td { padding: 7px 10px; vertical-align: top; font-size: 10px; }
-    .num { text-align: right; }
-    .description { width: 31%; }
+    tbody td { padding: 6px 5px; vertical-align: top; font-size: 10px; }
+    td.description, th.description {
+      padding-left: 8px;
+      padding-right: 8px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .description { width: 42%; }
     .spacer { flex: 1 1 auto; min-height: 40px; }
     .totals { width: 270px; margin-left: auto; font-size: 12px; }
     .total-row {
@@ -4344,31 +4497,223 @@ function reportTemplateCss() {
     }
     .grand { font-weight: 700; font-size: 12px; }
     .footer {
-      position: relative;
-      margin-top: 12px;
-      min-height: 34px;
-      font-size: 12px;
+      margin-top: 10px;
+      padding-top: 8px;
+      font-size: 10px;
       color: #111;
       flex-shrink: 0;
+      border-top: 1px solid var(--line);
     }
-    .page-number { text-align: center; }
-    .generated {
-      position: absolute;
-      right: 0;
-      bottom: 0;
+    .footer__inner {
+      position: relative;
+      min-height: 28px;
+      padding-top: 6px;
+    }
+    .footer__note {
+      text-align: center;
       color: var(--muted);
+      font-size: 10px;
+      line-height: 1.4;
+      margin-bottom: 4px;
+    }
+    .footer__note a { color: inherit; }
+    .page-number { text-align: center; font-size: 10px; }
+    .generated {
+      text-align: center;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 9px;
     }
     @media print {
       body { background: #fff; padding: 0; }
       .artboard-label { display: none; }
+      .report-document .page + .page { margin-top: 0; page-break-before: always; }
       .page {
         width: 100%;
+        height: auto;
         min-height: auto;
+        max-height: none;
         border: none;
         margin: 0;
       }
     }
   `;
+}
+
+const REPORT_PAGE_WIDTH_PX = 1123;
+const REPORT_PAGE_HEIGHT_PX = 794;
+/** Max chars on one report description line (~42% col @ 10px Arial). */
+const REPORT_DESCRIPTION_MAX_CHARS = 84;
+/** Rows per A4 landscape page (conservative — room for header, thead, footer, totals). */
+const REPORT_PAGINATION = { first: 16, middle: 20, last: 14 };
+
+function paginateReportEntries(entries) {
+  if (!entries.length) return [[]];
+  const { first, middle, last } = REPORT_PAGINATION;
+  if (entries.length <= last) return [entries.slice()];
+
+  const pages = [];
+  let i = 0;
+  pages.push(entries.slice(i, i + first));
+  i += first;
+
+  while (i < entries.length) {
+    const rem = entries.length - i;
+    if (rem <= last) {
+      pages.push(entries.slice(i));
+      break;
+    }
+    if (rem <= last + middle) {
+      const splitAt = rem - last;
+      pages.push(entries.slice(i, i + splitAt));
+      i += splitAt;
+      pages.push(entries.slice(i));
+      break;
+    }
+    pages.push(entries.slice(i, i + middle));
+    i += middle;
+  }
+  return pages;
+}
+
+function formatReportPageNumber(pageNum, totalPages) {
+  const width = Math.max(2, String(totalPages).length);
+  return String(pageNum).padStart(width, '0');
+}
+
+function reportTableColgroupHtml() {
+  return `<colgroup>
+    <col class="col-date" />
+    <col class="col-time" />
+    <col class="col-time" />
+    <col class="col-pause" />
+    <col class="col-desc" />
+    <col class="col-num" />
+    <col class="col-num" />
+    <col class="col-num" />
+  </colgroup>`;
+}
+
+function reportTableHeadHtml() {
+  return `${reportTableColgroupHtml()}<thead>
+          <tr>
+            <th>${escapeHtml(tr('colDate'))}</th>
+            <th>${escapeHtml(tr('colTimeStart'))}</th>
+            <th>${escapeHtml(tr('colTimeEnd'))}</th>
+            <th>${escapeHtml(tr('colTimePause'))}</th>
+            <th class="description">${escapeHtml(tr('colDescription'))}</th>
+            <th class="num">${escapeHtml(tr('colHours'))}</th>
+            <th class="num">${escapeHtml(tr('colRate'))}</th>
+            <th class="num">${escapeHtml(tr('colTotal'))}</th>
+          </tr>
+        </thead>`;
+}
+
+function truncateReportDescription(text) {
+  const s = String(text ?? '');
+  if (s.length <= REPORT_DESCRIPTION_MAX_CHARS) return s;
+  return `${s.slice(0, REPORT_DESCRIPTION_MAX_CHARS - 1)}…`;
+}
+
+function reportEntryRowHtml(e) {
+  return `<tr>
+        <td>${escapeHtml(e.date)}</td>
+        <td>${escapeHtml(e.start)}</td>
+        <td>${escapeHtml(e.end)}</td>
+        <td>${escapeHtml(e.pause)}</td>
+        <td class="description">${escapeHtml(truncateReportDescription(e.description))}</td>
+        <td class="num">${escapeHtml(e.hours)}</td>
+        <td class="num">${escapeHtml(formatMoney(e.rate, e.currency))}</td>
+        <td class="num">${escapeHtml(formatMoney(e.total, e.currency))}</td>
+      </tr>`;
+}
+
+function reportFullHeaderHtml({ logoMarkup, clientLabel, projectLabel, printDate }) {
+  return `<header class="report-header">
+      <div class="report-header__title">${escapeHtml(tr('reportTitle'))}</div>
+      <div class="report-header__row2">
+        <div class="report-header__brand">
+          <div class="logo-box">${logoMarkup}</div>
+          ${reportHeaderNoteHtml()}
+        </div>
+        <dl class="meta">
+          <dt>${escapeHtml(tr('customer'))}</dt>
+          <dd>${escapeHtml(clientLabel)}</dd>
+          <dt>${escapeHtml(tr('project'))}</dt>
+          <dd>${escapeHtml(projectLabel)}</dd>
+          <dt>${escapeHtml(tr('period'))}</dt>
+          <dd>${escapeHtml(reportPeriodLabel())}</dd>
+          <dt>${escapeHtml(tr('printDate'))}</dt>
+          <dd>${escapeHtml(printDate)}</dd>
+        </dl>
+      </div>
+    </header>`;
+}
+
+function reportCompactHeaderHtml({ clientLabel, projectLabel }) {
+  return `<header class="report-header report-header--compact">
+      <div class="report-header__title">${escapeHtml(tr('reportTitle'))}</div>
+      <div class="report-header__subtitle">${escapeHtml(clientLabel)} · ${escapeHtml(projectLabel)} · ${escapeHtml(reportPeriodLabel())}</div>
+    </header>`;
+}
+
+function reportTotalsHtml(subtotal, reportCur) {
+  return `<section class="totals">
+      <div class="total-row">
+        <span>${escapeHtml(tr('subtotal'))}</span>
+        <span>${escapeHtml(formatMoney(subtotal, reportCur))}</span>
+      </div>
+      <div class="total-row grand">
+        <span>${escapeHtml(tr('grandTotal'))}</span>
+        <span>${escapeHtml(formatMoney(subtotal, reportCur))}</span>
+      </div>
+    </section>`;
+}
+
+function reportFooterHtml(pageNum, totalPages) {
+  return `<footer class="footer">
+      <div class="footer__inner">
+        ${reportFooterNoteHtml()}
+        <div class="page-number">${escapeHtml(tr('pageLabel', { n: formatReportPageNumber(pageNum, totalPages) }))}</div>
+        <div class="generated">${escapeHtml(tr('generatedBy'))}</div>
+      </div>
+    </footer>`;
+}
+
+function prepareReportPageForCapture(pageEl) {
+  const spacer = pageEl.querySelector('.spacer');
+  const prev = {
+    width: pageEl.style.width,
+    minHeight: pageEl.style.minHeight,
+    height: pageEl.style.height,
+    maxHeight: pageEl.style.maxHeight,
+    border: pageEl.style.border,
+    spacerMin: spacer?.style.minHeight ?? '',
+    spacerFlex: spacer?.style.flex ?? ''
+  };
+  pageEl.style.width = `${REPORT_PAGE_WIDTH_PX}px`;
+  pageEl.style.minHeight = `${REPORT_PAGE_HEIGHT_PX}px`;
+  pageEl.style.height = `${REPORT_PAGE_HEIGHT_PX}px`;
+  pageEl.style.maxHeight = `${REPORT_PAGE_HEIGHT_PX}px`;
+  pageEl.style.border = 'none';
+  if (spacer) {
+    spacer.style.minHeight = '0';
+    spacer.style.flex = '1 1 auto';
+  }
+  return prev;
+}
+
+function restoreReportPageAfterCapture(pageEl, prev) {
+  pageEl.style.width = prev.width;
+  pageEl.style.minHeight = prev.minHeight;
+  pageEl.style.height = prev.height;
+  pageEl.style.maxHeight = prev.maxHeight;
+  pageEl.style.border = prev.border;
+  const spacer = pageEl.querySelector('.spacer');
+  if (spacer) {
+    spacer.style.minHeight = prev.spacerMin;
+    spacer.style.flex = prev.spacerFlex;
+  }
 }
 
 function renderReportDocument() {
@@ -4382,74 +4727,39 @@ function renderReportDocument() {
     ? `<img src="${logoSrc}" alt="Logo" />`
     : escapeHtml(state.settings.company || 'Logo');
 
-  const rows = entries.length
-    ? entries
-        .map(
-          e => `<tr>
-        <td>${escapeHtml(e.date)}</td>
-        <td>${escapeHtml(e.start)}</td>
-        <td>${escapeHtml(e.end)}</td>
-        <td>${escapeHtml(e.pause)}</td>
-        <td>${escapeHtml(e.description)}</td>
-        <td class="num">${escapeHtml(e.hours)}</td>
-        <td class="num">${escapeHtml(formatMoney(e.rate, e.currency))}</td>
-        <td class="num">${escapeHtml(formatMoney(e.total, e.currency))}</td>
-      </tr>`
-        )
-        .join('')
-    : `<tr><td colspan="8" style="text-align:center;color:#6b7280;padding:24px 10px">${tr('noSessionsFilter')}</td></tr>`;
+  const headerCtx = { logoMarkup, clientLabel, projectLabel, printDate };
+  const pageChunks = paginateReportEntries(entries);
+  const totalPages = pageChunks.length;
 
-  return `<div class="artboard-label">${escapeHtml(tr('reportTitle'))}</div>
-  <main class="page" id="reportDoc">
-    <header class="report-header">
-      <div class="report-header__title">${escapeHtml(tr('reportTitle'))}</div>
-      <div class="report-header__row2">
-        <div class="logo-box">${logoMarkup}</div>
-        <dl class="meta">
-          <dt>${escapeHtml(tr('customer'))}</dt>
-          <dd>${escapeHtml(clientLabel)}</dd>
-          <dt>${escapeHtml(tr('project'))}</dt>
-          <dd>${escapeHtml(projectLabel)}</dd>
-          <dt>${escapeHtml(tr('period'))}</dt>
-          <dd>${escapeHtml(reportPeriodLabel())}</dd>
-          <dt>${escapeHtml(tr('printDate'))}</dt>
-          <dd>${escapeHtml(printDate)}</dd>
-        </dl>
-      </div>
-    </header>
+  const pagesHtml = pageChunks
+    .map((chunk, idx) => {
+      const pageNum = idx + 1;
+      const isFirst = idx === 0;
+      const isLast = idx === totalPages - 1;
+      const header = isFirst ? reportFullHeaderHtml(headerCtx) : reportCompactHeaderHtml(headerCtx);
+      const tbody = chunk.length
+        ? chunk.map(reportEntryRowHtml).join('')
+        : isFirst
+          ? `<tr><td colspan="8" style="text-align:center;color:#6b7280;padding:24px 10px">${escapeHtml(tr('noSessionsFilter'))}</td></tr>`
+          : '';
+      const flashClass = isFirst ? ' report-page--flash-target' : '';
+      return `<main class="page${flashClass}" data-page="${pageNum}">
+    ${header}
     <section class="table-wrap">
       <table aria-label="${escapeHtml(tr('reportTitle'))}">
-        <thead>
-          <tr>
-            <th>${escapeHtml(tr('colDate'))}</th>
-            <th>${escapeHtml(tr('colTimeStart'))}</th>
-            <th>${escapeHtml(tr('colTimeEnd'))}</th>
-            <th>${escapeHtml(tr('colTimePause'))}</th>
-            <th class="description">${escapeHtml(tr('colDescription'))}</th>
-            <th class="num">${escapeHtml(tr('colHours'))}</th>
-            <th class="num">${escapeHtml(tr('colRate'))}</th>
-            <th class="num">${escapeHtml(tr('colTotal'))}</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
+        ${reportTableHeadHtml()}
+        <tbody>${tbody}</tbody>
       </table>
     </section>
     <div class="spacer"></div>
-    <section class="totals">
-      <div class="total-row">
-        <span>${escapeHtml(tr('subtotal'))}</span>
-        <span>${escapeHtml(formatMoney(subtotal, reportCur))}</span>
-      </div>
-      <div class="total-row grand">
-        <span>${escapeHtml(tr('grandTotal'))}</span>
-        <span>${escapeHtml(formatMoney(subtotal, reportCur))}</span>
-      </div>
-    </section>
-    <footer class="footer">
-      <div class="page-number">${escapeHtml(tr('pageLabel', { n: '01' }))}</div>
-      <div class="generated">${escapeHtml(tr('generatedBy'))}</div>
-    </footer>
+    ${isLast ? reportTotalsHtml(subtotal, reportCur) : ''}
+    ${reportFooterHtml(pageNum, totalPages)}
   </main>`;
+    })
+    .join('\n');
+
+  return `<div class="artboard-label">${escapeHtml(tr('reportTitle'))}</div>
+  <div class="report-document" id="reportDoc">${pagesHtml}</div>`;
 }
 
 function reportHtmlDocument() {
@@ -4801,77 +5111,53 @@ function loadHtml2Canvas() {
   });
 }
 
-/** PDF from the live HTML preview — A4 landscape to match the report artboard. */
+/** PDF from the live HTML preview — one A4 landscape page per report sheet. */
 async function exportReportPdf(opts = {}) {
   const openAfter = opts.openAfter !== false;
   const previewHost = $('reportPreview');
   if (previewHost) previewHost.innerHTML = renderReportDocument();
-  const el = $('reportDoc');
-  if (!el) throw new Error('Preview not ready. Click Generate preview first.');
+  const doc = $('reportDoc');
+  const pages = doc ? [...doc.querySelectorAll('.page')] : [];
+  if (!pages.length) throw new Error('Preview not ready. Click Generate preview first.');
 
-  // Capture full A4 artboard so spacer keeps Pag. / Generated at the page bottom.
-  const prevWidth = el.style.width;
-  const prevMinHeight = el.style.minHeight;
-  const prevHeight = el.style.height;
-  const prevBorder = el.style.border;
-  const spacer = el.querySelector('.spacer');
-  const prevSpacerMin = spacer ? spacer.style.minHeight : '';
-  const prevSpacerFlex = spacer ? spacer.style.flex : '';
-  el.style.width = '1123px';
-  el.style.minHeight = '794px';
-  el.style.height = '794px';
-  el.style.border = 'none';
-  if (spacer) {
-    spacer.style.minHeight = '0';
-    spacer.style.flex = '1 1 auto';
-  }
+  const html2canvas = await loadHtml2Canvas();
+  const JsPdfCtor = await loadJsPdf();
+  const pdf = new JsPdfCtor({ orientation: 'landscape', unit: 'mm', format: 'a4', compress: true });
+  const pageW = pdf.internal.pageSize.getWidth();
+  const pageH = pdf.internal.pageSize.getHeight();
+  const margin = 8;
+  const usableW = pageW - margin * 2;
+  const usableH = pageH - margin * 2;
 
   try {
-    const html2canvas = await loadHtml2Canvas();
-    const canvas = await html2canvas(el, {
-      scale: 2,
-      backgroundColor: '#ffffff',
-      useCORS: true,
-      logging: false,
-      width: 1123,
-      height: 794,
-      windowWidth: 1123,
-      windowHeight: 794
-    });
-
-    const JsPdfCtor = await loadJsPdf();
-    const pdf = new JsPdfCtor({ orientation: 'landscape', unit: 'mm', format: 'a4', compress: true });
-    const pageW = pdf.internal.pageSize.getWidth();
-    const pageH = pdf.internal.pageSize.getHeight();
-    const margin = 8;
-    const usableW = pageW - margin * 2;
-    const usableH = pageH - margin * 2;
-    let imgW = usableW;
-    let imgH = (canvas.height * imgW) / canvas.width;
-    const imgData = canvas.toDataURL('image/png');
-
-    // One artboard → one PDF page (shrink to fit so footer stays on the sheet).
-    if (imgH > usableH) {
-      const s = usableH / imgH;
-      imgW *= s;
-      imgH = usableH;
+    for (let i = 0; i < pages.length; i += 1) {
+      const el = pages[i];
+      const prev = prepareReportPageForCapture(el);
+      try {
+        const canvas = await html2canvas(el, {
+          scale: 2,
+          backgroundColor: '#ffffff',
+          useCORS: true,
+          logging: false,
+          width: REPORT_PAGE_WIDTH_PX,
+          height: REPORT_PAGE_HEIGHT_PX,
+          windowWidth: REPORT_PAGE_WIDTH_PX,
+          windowHeight: REPORT_PAGE_HEIGHT_PX
+        });
+        if (i > 0) pdf.addPage('a4', 'landscape');
+        const imgData = canvas.toDataURL('image/png');
+        pdf.addImage(imgData, 'PNG', margin, margin, usableW, usableH, undefined, 'FAST');
+      } finally {
+        restoreReportPageAfterCapture(el, prev);
+      }
     }
-    const x = margin + (usableW - imgW) / 2;
-    pdf.addImage(imgData, 'PNG', x, margin, imgW, imgH, undefined, 'FAST');
 
     const bytes = new Uint8Array(pdf.output('arraybuffer'));
     const savedPath = await saveBytesFile(`${reportBaseName()}.pdf`, bytes);
     if (openAfter) await openSavedFile(savedPath);
     return savedPath;
-  } finally {
-    el.style.width = prevWidth;
-    el.style.minHeight = prevMinHeight;
-    el.style.height = prevHeight;
-    el.style.border = prevBorder;
-    if (spacer) {
-      spacer.style.minHeight = prevSpacerMin;
-      spacer.style.flex = prevSpacerFlex;
-    }
+  } catch (err) {
+    throw err;
   }
 }
 
@@ -5015,15 +5301,16 @@ function renderReports() {
     if (preview) preview.innerHTML = renderReportDocument();
     if (opts.flash) {
       const docEl = $('reportDoc');
-      docEl?.classList.remove('report-page--flash');
+      docEl?.querySelectorAll('.page').forEach(page => page.classList.remove('report-page--flash'));
       void docEl?.offsetWidth;
-      docEl?.classList.add('report-page--flash');
+      docEl?.querySelector('.page')?.classList.add('report-page--flash');
       const entries = getReportEntries();
       const total = entries.reduce((s, e) => s + e.total, 0);
+      const pageCount = paginateReportEntries(entries).length;
       const status = $('reportGenerateStatus');
       if (status) {
         status.textContent = entries.length
-          ? `Preview updated · ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} · ${formatMoney(total, reportMoneyCurrency(entries))}`
+          ? `${tr('reportPreviewUpdated', { entries: entries.length, pages: pageCount, total: formatMoney(total, reportMoneyCurrency(entries)) })}`
           : tr('noSessionsFilter');
       }
     }
@@ -5079,6 +5366,8 @@ function renderSettings() {
   if (!root) return;
   const inh = state.inherited;
   const locPref = window.MusomoI18n?.getStoredPreference?.() || 'system';
+  const uiTheme = normalizeUiTheme(state.settings.uiTheme);
+  const dateFmt = normalizeDateFormat(state.settings.dateFormat);
   const locOpts = [
     ['system', 'languageSystem'],
     ['en', 'languageEn'],
@@ -5094,6 +5383,7 @@ function renderSettings() {
     .join('');
   root.innerHTML = `
     <div class="settings-layout">
+      <div class="settings-layout__col settings-layout__col--main">
       <div class="settings-section">
         <h3>${tr('studioProfile')}</h3>
         <p class="hint">${tr('studioProfileHint')}</p>
@@ -5135,11 +5425,30 @@ function renderSettings() {
           <p class="hint" style="margin:6px 0 0">${tr('currencyHint')}</p>
         </div>
         <div class="field">
+          <label for="sReportHeaderNote">${tr('reportHeaderNote')}</label>
+          <textarea id="sReportHeaderNote" rows="3" placeholder="${escapeHtml(tr('reportHeaderNotePlaceholder'))}">${escapeHtml(state.settings.reportHeaderNote || '')}</textarea>
+          <p class="hint" style="margin:6px 0 0">${tr('reportHeaderNoteHint')}</p>
+        </div>
+        <div class="field">
           <label for="sFooter">${tr('reportFooter')}</label>
-          <textarea id="sFooter">${escapeHtml(state.settings.reportFooter)}</textarea>
+          <textarea id="sFooter" rows="3" placeholder="${escapeHtml(tr('reportFooterPlaceholder'))}">${escapeHtml(state.settings.reportFooter)}</textarea>
+          <p class="hint" style="margin:6px 0 0">${tr('reportFooterHint')}</p>
         </div>
         <button type="button" class="btn btn-primary" id="btnSaveSettings">${tr('saveSettings')}</button>
       </div>
+      <div class="settings-section">
+        <h3>${tr('appearanceSection')}</h3>
+        <p class="hint">${tr('appearanceHint')}</p>
+        <div class="field">
+          <label for="sUiTheme">${tr('uiThemeLabel')}</label>
+          <select id="sUiTheme">
+            <option value="light"${uiTheme === 'light' ? ' selected' : ''}>${tr('uiThemeLight')}</option>
+            <option value="dark"${uiTheme === 'dark' ? ' selected' : ''}>${tr('uiThemeDark')}</option>
+          </select>
+        </div>
+      </div>
+      </div>
+      <div class="settings-layout__col settings-layout__col--side">
       <div class="settings-section">
         <h3>${tr('languageSection')}</h3>
         <p class="hint">${tr('languageHint')}</p>
@@ -5147,11 +5456,17 @@ function renderSettings() {
           <label for="sLocale">${tr('languageSection')}</label>
           <select id="sLocale">${locOpts}</select>
         </div>
+        <div class="field">
+          <label for="sDateFormat">${tr('dateFormat')}</label>
+          <select id="sDateFormat">
+            <option value="european"${dateFmt === 'european' ? ' selected' : ''}>${tr('dateFormatEuropean')}</option>
+            <option value="american"${dateFmt === 'american' ? ' selected' : ''}>${tr('dateFormatAmerican')}</option>
+          </select>
+          <p class="hint" style="margin:6px 0 0">${tr('dateFormatHint')}</p>
+        </div>
         <div class="settings-inherited" style="margin-top:12px">
           <dl>
-            <div><dt>${tr('dateFormat')}</dt><dd>${escapeHtml(inh.dateFormat)}</dd></div>
             <div><dt>${tr('timeFormat')}</dt><dd>${escapeHtml(inh.timeFormat)}</dd></div>
-            <div><dt>${tr('theme')}</dt><dd>${escapeHtml(inh.theme)}</dd></div>
           </dl>
         </div>
       </div>
@@ -5172,6 +5487,7 @@ function renderSettings() {
             <button type="button" class="btn" id="btnRestoreArchive">${tr('restoreSelected')}</button>
           </div>
         </div>
+      </div>
       </div>
     </div>
   `;
@@ -5215,6 +5531,14 @@ function renderSettings() {
     const pref = e.target.value || 'system';
     window.MusomoI18n?.setLocale?.(pref);
   });
+  $('sUiTheme')?.addEventListener('change', e => {
+    applyUiTheme(e.target.value);
+    void persistSettings();
+  });
+  $('sDateFormat')?.addEventListener('change', e => {
+    applyDateFormat(e.target.value);
+    void persistSettings().then(() => refreshAfterDateFormatChange());
+  });
   $('btnUploadLogo')?.addEventListener('click', () => pickBrandImage('logo'));
   $('btnUploadAvatar')?.addEventListener('click', () => pickBrandImage('avatar'));
   $('btnSaveSettings')?.addEventListener('click', async () => {
@@ -5224,6 +5548,7 @@ function renderSettings() {
     state.settings.currency = normalizeCurrency($('sCurrency')?.value) || getStudioCurrency();
     state.inherited.currency = state.settings.currency;
     state.settings.reportFooter = String($('sFooter')?.value || '').trim();
+    state.settings.reportHeaderNote = String($('sReportHeaderNote')?.value || '').trim();
     const words = state.settings.company.split(/\s+/).filter(Boolean);
     state.settings.logoInitials =
       words.length >= 2 ? (words[0][0] + words[1][0]).toUpperCase() : (words[0]?.slice(0, 2) || 'MD').toUpperCase();
@@ -5628,7 +5953,7 @@ async function openMini() {
 }
 
 function getAppVersion() {
-  return window.MUSOMO_APP_VERSION || '1.0.20';
+  return window.MUSOMO_APP_VERSION || '1.1.0';
 }
 
 function versionLabelText() {
@@ -5914,6 +6239,158 @@ async function bindNativeMenu() {
   }
 }
 
+let allowAppExit = false;
+let closeDialogOpen = false;
+
+async function sessionCloseChoiceDialog() {
+  try {
+    return await invoke('tracker_session_close_dialog', {
+      title: tr('activeSessionCloseTitle'),
+      saveClose: tr('activeSessionCloseSaveClose'),
+      savePause: tr('activeSessionCloseSavePause'),
+      dontSave: tr('activeSessionCloseDontSave')
+    });
+  } catch (_) {
+    return null;
+  }
+}
+
+function closeVisibleModalFromEscape() {
+  const ids = [
+    'clientModal',
+    'projectModal',
+    'completeProjectModal',
+    'taskModal',
+    'manualEntryModal',
+    'moveSessionModal',
+    'aboutModal',
+    'helpModal',
+    'privacyModal'
+  ];
+  for (const id of ids) {
+    const modal = $(id);
+    if (modal && !modal.hidden) {
+      modal.hidden = true;
+      return true;
+    }
+  }
+  return false;
+}
+
+async function runtimeGetTimerState() {
+  try {
+    return await invoke('tracker_get_timer_state');
+  } catch (_) {
+    return null;
+  }
+}
+
+function runtimeIsRunning(data) {
+  if (!data || typeof data !== 'object') return false;
+  return !!data.running;
+}
+
+async function ensurePausePersisted() {
+  if (state.timerRunning) {
+    timerPause();
+    pushTimerStateToMini(true);
+    return;
+  }
+  if (liveTimerSeconds() > 0 || state.timer.dayStart) {
+    pushTimerStateToMini(true);
+  }
+}
+
+async function handleCloseRequest() {
+  if (allowAppExit) {
+    allowAppExit = true;
+    await invoke('allow_app_exit');
+    return;
+  }
+  if (closeDialogOpen) return;
+  closeDialogOpen = true;
+  try {
+    const runtime = await runtimeGetTimerState();
+    if (runtime?.pendingCommit && Number(runtime.pendingCommit.secs) > 0) {
+      await restoreTimerRuntime();
+    }
+
+    const running = runtimeIsRunning(runtime) || !!state.timerRunning;
+
+    if (running) {
+      const choice = await sessionCloseChoiceDialog();
+      if (!choice) return;
+      if (choice === 'save_close') {
+        await stopTimer(true);
+        pushTimerStateToMini(true);
+      } else if (choice === 'save_pause') {
+        timerPause();
+        pushTimerStateToMini(true);
+      } else if (choice === 'discard') {
+        await invoke('tracker_discard_open_timer');
+      }
+      allowAppExit = true;
+      await invoke('allow_app_exit');
+      return;
+    }
+
+    await ensurePausePersisted();
+    allowAppExit = true;
+    await invoke('allow_app_exit');
+  } finally {
+    closeDialogOpen = false;
+  }
+}
+
+function bindEscapeGuard() {
+  document.addEventListener(
+    'keydown',
+    e => {
+      if (e.key !== 'Escape') return;
+      if (closeVisibleModalFromEscape()) {
+        e.preventDefault();
+        return;
+      }
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      void handleCloseRequest();
+    },
+    true
+  );
+}
+
+function bindMainCloseGuard() {
+  try {
+    const getWin = window.__TAURI__?.webviewWindow?.getCurrentWebviewWindow;
+    if (typeof getWin !== 'function') return;
+    const win = getWin();
+    if (!win?.onCloseRequested) return;
+    void win.onCloseRequested(event => {
+      if (allowAppExit) return;
+      event.preventDefault();
+      void handleCloseRequest();
+    });
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+async function handleAppExitRequested() {
+  await handleCloseRequest();
+}
+
+async function bindAppExitGuard() {
+  const listen = window.__TAURI__?.event?.listen;
+  if (typeof listen !== 'function') return;
+  try {
+    await listen('app-exit-requested', () => {
+      void handleAppExitRequested();
+    });
+  } catch (_) {
+    /* ignore */
+  }
+}
+
 async function init() {
   await window.MusomoI18n?.initLocale?.();
   applyStaticI18n();
@@ -5925,6 +6402,7 @@ async function init() {
   renderOverview();
   applyTimerContext();
   await bootstrapTracker();
+  applyUiTheme(state.settings.uiTheme);
   await restoreTimerRuntime();
   refreshChrome();
   setPage('overview');
@@ -5937,6 +6415,9 @@ async function init() {
   bindManualEntryModal();
   bindMiniTimerSync();
   syncTimerUi();
+  bindEscapeGuard();
+  bindMainCloseGuard();
+  void bindAppExitGuard();
 }
 
 init();

@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>Version 1.0.20</strong>
+  <strong>Version 1.1.0</strong>
 </p>
 
 <p align="center">
@@ -26,6 +26,15 @@
 ---
 
 Musomo Tracker helps you manage clients, projects, and billable time — without cloud accounts or subscriptions. All data stays on your device in a local SQLite database.
+
+## What's new in 1.1.0
+
+- **Dark theme** — default appearance; light mode still available in Settings
+- **Improved sidebar** — clearer navigation and quick actions
+- **Mini Timer UX** — opening the mini timer minimizes the main window; **Main** brings it back
+- **Multi-page reports** — PDF export with header/footer on every page, custom notes, date format (EU/US)
+- **Smarter close flow** — save, save paused, or discard when closing with an active timer
+- **Sessions & UI polish** — table styling, project detail views, timer panel actions
 
 ## Main features
 
@@ -93,12 +102,12 @@ Always-on-top window for tracking time while working in other apps. Stays in syn
 
 | Platform | Status |
 |----------|--------|
-| **macOS** | Primary target (10.13+). Release builds available as `.app` / `.dmg`. |
+| **macOS** | Primary target (10.13+). Release builds available as signed & notarized `.app` / `.dmg`. |
 | **Windows** | Tauri target configured; **not yet verified**. |
 
 ## Installation (macOS)
 
-1. Download the release from [tracker.musomo.net/#download](https://tracker.musomo.net/#download)
+1. Download the release from [GitHub Releases](https://github.com/musomo-design/musomo-tracker/releases) or [tracker.musomo.net/#download](https://tracker.musomo.net/#download)
 2. Open the DMG and drag **Musomo Tracker** to Applications
 3. Launch the app — demo data loads on first run (replaceable in Settings)
 
@@ -132,8 +141,10 @@ Release artifacts can be staged with:
 
 ```bash
 bash scripts/stage-dist.sh
-# Output: dist/v1.0.20/
+# Output: dist/v1.1.0/
 ```
+
+Signed and notarized macOS builds run via GitHub Actions (`.github/workflows/macos-build-notarize.yml`).
 
 Version is defined in `package.json` and synchronized via `npm run sync-version`.  
 Bundle identifier: `net.musomo.tracker`

@@ -11,6 +11,7 @@ commands.allow = [
     "tracker_push_timer_state",
     "tracker_get_timer_state",
     "tracker_clear_timer_pending_commit",
+    "tracker_discard_open_timer",
     "tracker_init",
     "tracker_reset_database",
     "tracker_list_archives",
@@ -27,5 +28,8 @@ commands.allow = [
     "tracker_import_brand_file",
     "save_downloaded_file",
     "open_file",
-    "compose_mail_with_attachment"
+    "compose_mail_with_attachment",
+    "allow_app_exit",
+    "tracker_confirm_dialog",
+    "tracker_session_close_dialog"
 ]
