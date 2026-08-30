@@ -19,6 +19,10 @@ pub fn archive_dir() -> Result<PathBuf, String> {
     Ok(parent.join("archives"))
 }
 
+fn auto_archive_dir() -> Result<PathBuf, String> {
+    Ok(archive_dir()?.join("auto"))
+}
+
 pub fn assets_dir() -> Result<PathBuf, String> {
     let path = db_path()?;
     let parent = path
@@ -27,63 +31,305 @@ pub fn assets_dir() -> Result<PathBuf, String> {
     Ok(parent.join("assets"))
 }
 
-fn stamp_now() -> String {
+const AUTO_BACKUP_KEEP: usize = 10;
+
+fn stamp_unix() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or(0);
-    // YYYYMMDD-HHMMSS-ish from unix (good enough for sort keys)
-    let days = secs / 86400;
-    let tod = secs % 86400;
-    let h = tod / 3600;
-    let m = (tod % 3600) / 60;
-    let s = tod % 60;
-    format!("{days:05}-{h:02}{m:02}{s:02}")
+        .unwrap_or(0)
 }
 
-/// Copy current DB into archives/ before destructive ops. Returns archive file name.
-pub fn archive_current_database() -> Result<String, String> {
+fn stamp_unix_str() -> String {
+    stamp_unix().to_string()
+}
+
+fn copy_database_to_path(dest: &std::path::Path) -> Result<(), String> {
     let src = db_path()?;
     if !src.exists() {
-        return Ok(String::new());
+        return Err("Database not found.".into());
     }
     {
         let conn = open_db()?;
         let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
     }
-    let dir = archive_dir()?;
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let name = format!("tracker-backup-{}.db", stamp_now());
-    let dest = dir.join(&name);
-    fs::copy(&src, &dest).map_err(|e| e.to_string())?;
-    Ok(name)
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::copy(&src, dest).map_err(|e| e.to_string())?;
+    snapshot_brand_assets_for_archive(dest)?;
+    Ok(())
 }
 
-pub fn list_archives() -> Result<Vec<String>, String> {
+fn brand_assets_sidecar_path(db_path: &std::path::Path) -> PathBuf {
+    let stem = db_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("backup");
+    db_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join(format!("{stem}.assets"))
+}
+
+fn snapshot_brand_assets_for_archive(db_path: &std::path::Path) -> Result<(), String> {
+    let sidecar = brand_assets_sidecar_path(db_path);
+    if sidecar.exists() {
+        fs::remove_dir_all(&sidecar).map_err(|e| e.to_string())?;
+    }
+    let src = assets_dir()?;
+    if !src.exists() {
+        return Ok(());
+    }
+    let mut copied = false;
+    fs::create_dir_all(&sidecar).map_err(|e| e.to_string())?;
+    for name in ["print-logo.png", "print-logo.svg", "avatar.png", "avatar.svg"] {
+        let from = src.join(name);
+        if from.is_file() {
+            fs::copy(&from, sidecar.join(name)).map_err(|e| e.to_string())?;
+            copied = true;
+        }
+    }
+    if !copied {
+        let _ = fs::remove_dir_all(&sidecar);
+    }
+    Ok(())
+}
+
+fn restore_brand_assets_from_sidecar(db_path: &std::path::Path) -> Result<(), String> {
+    clear_brand_assets()?;
+    let sidecar = brand_assets_sidecar_path(db_path);
+    if !sidecar.is_dir() {
+        return Ok(());
+    }
+    let dest = assets_dir()?;
+    fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+    for entry in fs::read_dir(&sidecar).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if !entry.path().is_file() {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        fs::copy(entry.path(), dest.join(name)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn remove_brand_assets_sidecar(db_path: &std::path::Path) {
+    let sidecar = brand_assets_sidecar_path(db_path);
+    if sidecar.is_dir() {
+        let _ = fs::remove_dir_all(&sidecar);
+    }
+}
+
+fn sanitize_backup_label(label: &str) -> Result<String, String> {
+    let trimmed = label.trim();
+    if trimmed.is_empty() {
+        return Err("Backup name is required.".into());
+    }
+    if trimmed.chars().count() > 64 {
+        return Err("Backup name too long (max 64 characters).".into());
+    }
+    let mut slug = String::new();
+    let mut prev_dash = false;
+    for c in trimmed.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+            prev_dash = false;
+        } else if c == ' ' || c == '-' || c == '_' {
+            if !slug.is_empty() && !prev_dash {
+                slug.push('-');
+                prev_dash = true;
+            }
+        } else {
+            return Err(
+                "Use only letters, numbers, spaces, dashes and underscores in the backup name.".into(),
+            );
+        }
+    }
+    let slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() {
+        return Err("Backup name is required.".into());
+    }
+    Ok(slug)
+}
+
+fn is_legacy_auto_filename(name: &str) -> bool {
+    if name.starts_with("tracker-backup-auto-") {
+        return true;
+    }
+    let stem = name.strip_suffix(".db").unwrap_or(name);
+    let rest = stem.strip_prefix("tracker-backup-").unwrap_or(stem);
+    let parts: Vec<&str> = rest.split('-').collect();
+    parts.len() == 2
+        && parts[0].len() == 5
+        && parts[0].chars().all(|c| c.is_ascii_digit())
+        && parts[1].len() == 6
+        && parts[1].chars().all(|c| c.is_ascii_digit())
+}
+
+fn parse_unix_from_filename(name: &str) -> Option<u64> {
+    let stem = name.strip_suffix(".db")?;
+    let ts_str = stem.rsplit('-').next()?;
+    if ts_str.len() >= 9 && ts_str.chars().all(|c| c.is_ascii_digit()) {
+        return ts_str.parse().ok();
+    }
+    None
+}
+
+fn parse_manual_label(name: &str) -> String {
+    let stem = name.strip_suffix(".db").unwrap_or(name);
+    let body = stem.strip_prefix("tracker-backup-").unwrap_or(stem);
+    if let Some((slug, ts)) = body.rsplit_once('-') {
+        if ts.len() >= 9 && ts.chars().all(|c| c.is_ascii_digit()) {
+            return slug.replace('-', " ");
+        }
+    }
+    body.replace('-', " ")
+}
+
+fn file_created_at(path: &std::path::Path, name: &str) -> i64 {
+    if let Some(ts) = parse_unix_from_filename(name) {
+        return ts as i64;
+    }
+    use std::time::UNIX_EPOCH;
+    path.metadata()
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn migrate_legacy_archives() -> Result<(), String> {
     let dir = archive_dir()?;
     if !dir.exists() {
-        return Ok(vec![]);
+        return Ok(());
     }
-    let mut names = vec![];
+    let auto_dir = auto_archive_dir()?;
+    fs::create_dir_all(&auto_dir).map_err(|e| e.to_string())?;
+    for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("tracker-backup-") || !name.ends_with(".db") {
+            continue;
+        }
+        if !is_legacy_auto_filename(name) {
+            continue;
+        }
+        let dest = auto_dir.join(name);
+        if dest.exists() {
+            continue;
+        }
+        if fs::rename(&path, &dest).is_err() {
+            fs::copy(&path, &dest).map_err(|e| e.to_string())?;
+            fs::remove_file(&path).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn prune_auto_backups(keep: usize) -> Result<(), String> {
+    let dir = auto_archive_dir()?;
+    if !dir.exists() {
+        return Ok(());
+    }
+    let mut files = vec![];
     for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("db") {
             continue;
         }
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if name.starts_with("tracker-backup-") {
-                names.push(name.to_string());
-            }
-        }
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        let sort_key = parse_unix_from_filename(&name).unwrap_or(0);
+        files.push((sort_key, path));
     }
-    names.sort();
-    names.reverse();
-    Ok(names)
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, path) in files.into_iter().skip(keep) {
+        remove_brand_assets_sidecar(&path);
+        let _ = fs::remove_file(path);
+    }
+    Ok(())
 }
 
-fn safe_archive_path(name: &str) -> Result<PathBuf, String> {
+/// Copy current DB into archives/auto/ before destructive ops. Returns archive file name.
+pub fn archive_current_database() -> Result<String, String> {
+    migrate_legacy_archives()?;
+    let name = format!("tracker-backup-auto-{}.db", stamp_unix_str());
+    let dest = auto_archive_dir()?.join(&name);
+    copy_database_to_path(&dest).or_else(|e| {
+        if e == "Database not found." {
+            Ok(())
+        } else {
+            Err(e)
+        }
+    })?;
+    let _ = prune_auto_backups(AUTO_BACKUP_KEEP);
+    Ok(name)
+}
+
+/// Manual backup with a user-chosen label. Returns archive file name.
+pub fn create_named_backup(label: String) -> Result<String, String> {
+    migrate_legacy_archives()?;
+    let slug = sanitize_backup_label(&label)?;
+    let name = format!("tracker-backup-{}-{}.db", slug, stamp_unix_str());
+    let dest = archive_dir()?.join(&name);
+    copy_database_to_path(&dest)?;
+    Ok(name)
+}
+
+pub fn list_archives() -> Result<Vec<TrackerArchiveEntry>, String> {
+    migrate_legacy_archives()?;
+    let dir = archive_dir()?;
+    if !dir.exists() {
+        return Ok(vec![]);
+    }
+    let auto_dir = auto_archive_dir()?;
+    let mut entries = vec![];
+    for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.is_dir() {
+            continue;
+        }
+        if auto_dir == path {
+            continue;
+        }
+        if path.extension().and_then(|e| e.to_str()) != Some("db") {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("tracker-backup-") {
+            continue;
+        }
+        entries.push(TrackerArchiveEntry {
+            name: name.to_string(),
+            label: parse_manual_label(name),
+            created_at: file_created_at(&path, name),
+        });
+    }
+    entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(entries)
+}
+
+fn safe_manual_archive_path(name: &str) -> Result<PathBuf, String> {
     let base = name
         .rsplit(['/', '\\'])
         .next()
@@ -92,28 +338,34 @@ fn safe_archive_path(name: &str) -> Result<PathBuf, String> {
     if !base.starts_with("tracker-backup-") || !base.ends_with(".db") {
         return Err("Invalid archive name.".into());
     }
-    if base.contains("..") {
+    if base.contains("..") || base.starts_with("tracker-backup-auto-") {
         return Err("Invalid archive name.".into());
     }
-    Ok(archive_dir()?.join(base))
+    let path = archive_dir()?.join(&base);
+    let auto_dir = auto_archive_dir()?;
+    if path.starts_with(&auto_dir) {
+        return Err("Invalid archive name.".into());
+    }
+    Ok(path)
 }
 
-/// Restore clients/projects/tasks/sessions from an archive. Keeps current settings/logos.
+pub fn delete_archive(name: String) -> Result<(), String> {
+    let path = safe_manual_archive_path(&name)?;
+    if !path.exists() {
+        return Err("Archive not found.".into());
+    }
+    remove_brand_assets_sidecar(&path);
+    fs::remove_file(&path).map_err(|e| e.to_string())
+}
+
+/// Restore full studio snapshot from an archive (data + settings + branding).
 pub fn restore_from_archive(name: String) -> Result<TrackerSnapshot, String> {
-    let archive_path = safe_archive_path(&name)?;
+    let _safety = archive_current_database()?;
+    let archive_path = safe_manual_archive_path(&name)?;
     if !archive_path.exists() {
         return Err("Archive not found.".into());
     }
     let conn = open_db()?;
-    // Snapshot current settings before wipe.
-    let settings = load_module_settings(&conn)?;
-    let auto_seed = conn
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'auto_seed_disabled'",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .unwrap_or_else(|_| "1".into());
 
     conn.execute_batch(
         "
@@ -134,19 +386,25 @@ pub fn restore_from_archive(name: String) -> Result<TrackerSnapshot, String> {
         INSERT INTO projects SELECT * FROM archive.projects;
         INSERT INTO tasks SELECT * FROM archive.tasks;
         INSERT INTO time_sessions SELECT * FROM archive.time_sessions;
+        DELETE FROM settings;
+        INSERT INTO settings SELECT key, value FROM archive.settings;
         DETACH DATABASE archive;
         ",
     )
     .map_err(|e| e.to_string())?;
 
-    // Restore logos/settings we preserved.
-    save_module_settings(&conn, &settings)?;
     conn.execute(
-        "INSERT INTO settings (key, value) VALUES ('auto_seed_disabled', ?1)
+        "INSERT INTO settings (key, value) VALUES ('auto_seed_disabled', '1')
          ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        params![auto_seed],
+        [],
     )
     .map_err(|e| e.to_string())?;
+
+    restore_brand_assets_from_sidecar(&archive_path)?;
+
+    let mut settings = load_module_settings(&conn)?;
+    migrate_brand_data_urls_to_files(&conn, &mut settings)?;
+    save_module_settings(&conn, &settings)?;
 
     snapshot_from_conn(&conn)
 }
@@ -455,13 +713,12 @@ fn clear_brand_assets() -> Result<(), String> {
     Ok(())
 }
 
-/// Wipe Tracker Studio data tables. Clean preserves settings; Restore Demo resets
-/// settings and brand images to the reusable Northstar demo profile.
+/// Wipe Tracker Studio data tables. Clean preserves settings/branding; Restore Demo
+/// loads the full Northstar demo profile (data + settings + cleared custom logos).
 /// Always archives the DB first.
 pub fn reset_database(reseed: bool) -> Result<TrackerSnapshot, String> {
     let _archive_name = archive_current_database()?;
     let conn = open_db()?;
-    // Keep logos / studio profile — only wipe operational data.
     conn.execute_batch(
         "
         DELETE FROM time_sessions;
@@ -473,29 +730,22 @@ pub fn reset_database(reseed: bool) -> Result<TrackerSnapshot, String> {
     .map_err(|e| e.to_string())?;
 
     if reseed {
-        // Allow seed once for restore-demo, then leave seeded data.
-        conn.execute("DELETE FROM settings WHERE key = 'auto_seed_disabled'", [])
-            .map_err(|e| e.to_string())?;
-        // seed_if_empty would overwrite settings logos — seed rows only.
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM clients", [], |row| row.get(0))
-            .map_err(|e| e.to_string())?;
-        if count == 0 {
-            for client in seed_clients() {
-                upsert_client(&conn, &client)?;
-            }
-            for project in seed_projects() {
-                upsert_project(&conn, &project)?;
-            }
-            for task in seed_tasks() {
-                upsert_task(&conn, &task)?;
-            }
-            for session in seed_sessions() {
-                upsert_session(&conn, &session)?;
-            }
-        }
         clear_brand_assets()?;
         save_module_settings(&conn, &demo_settings())?;
+        conn.execute("DELETE FROM settings WHERE key = 'auto_seed_disabled'", [])
+            .map_err(|e| e.to_string())?;
+        for client in seed_clients() {
+            upsert_client(&conn, &client)?;
+        }
+        for project in seed_projects() {
+            upsert_project(&conn, &project)?;
+        }
+        for task in seed_tasks() {
+            upsert_task(&conn, &task)?;
+        }
+        for session in seed_sessions() {
+            upsert_session(&conn, &session)?;
+        }
         conn.execute(
             "INSERT INTO settings (key, value) VALUES ('auto_seed_disabled', '1')
              ON CONFLICT(key) DO UPDATE SET value=excluded.value",

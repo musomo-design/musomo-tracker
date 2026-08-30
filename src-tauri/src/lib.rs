@@ -406,6 +406,8 @@ pub fn run() {
             tracker_studio::tracker_init,
             tracker_studio::tracker_reset_database,
             tracker_studio::tracker_list_archives,
+            tracker_studio::tracker_create_backup,
+            tracker_studio::tracker_delete_archive,
             tracker_studio::tracker_restore_archive,
             tracker_studio::tracker_upsert_client,
             tracker_studio::tracker_delete_client,

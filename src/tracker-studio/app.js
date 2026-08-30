@@ -575,6 +575,23 @@ function formatDisplayDate(value) {
   return `${dd}/${mm}/${yyyy}`;
 }
 
+function formatArchiveDateTime(unixSec) {
+  const sec = Number(unixSec);
+  if (!Number.isFinite(sec) || sec <= 0) return '';
+  const d = new Date(sec * 1000);
+  if (Number.isNaN(d.getTime())) return '';
+  const date = formatDisplayDate(d);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${date} ${hh}:${mm}`;
+}
+
+function formatArchiveOptionLabel(entry) {
+  const label = String(entry?.label || entry?.name || '').trim();
+  const when = formatArchiveDateTime(entry?.createdAt ?? entry?.created_at);
+  return when ? `${label} · ${when}` : label;
+}
+
 function refreshAfterDateFormatChange() {
   refreshChrome();
   setPage(state.page);
@@ -3787,6 +3804,11 @@ function renderTimer() {
             <span>${tr('openMiniTimerLink')}</span>
           </button>
           <span class="timer-main__links-sep" aria-hidden="true"></span>
+          <button type="button" id="btnTimerCloseMini">
+            <span class="timer-ico" style="--ico:url('./asset/time_tracker.svg')" aria-hidden="true"></span>
+            <span>${tr('closeMiniTimerLink')}</span>
+          </button>
+          <span class="timer-main__links-sep" aria-hidden="true"></span>
           <button type="button" id="btnManualEntry">
             <span class="timer-ico" style="--ico:url('./asset/session.svg')" aria-hidden="true"></span>
             <span>${tr('manualEntry')}</span>
@@ -3844,6 +3866,7 @@ function renderTimer() {
   $('btnTimerResume')?.addEventListener('click', timerResume);
   $('btnTimerStop')?.addEventListener('click', () => stopTimer(true));
   $('btnTimerMini')?.addEventListener('click', () => void openMini());
+  $('btnTimerCloseMini')?.addEventListener('click', () => void closeMini());
   $('btnManualEntry')?.addEventListener('click', openManualEntryModal);
   bindSessionActions($('timerSessionsPanel'));
 }
@@ -5479,12 +5502,21 @@ function renderSettings() {
           <button type="button" class="btn" id="btnRestoreDemo">${tr('restoreDemo')}</button>
         </div>
         <div class="field" style="margin-top:14px">
+          <label for="sBackupName">${tr('backupName')}</label>
+          <p class="hint" style="margin:4px 0 8px">${tr('backupNameHint')}</p>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+            <input id="sBackupName" type="text" maxlength="64" placeholder="${escapeHtml(tr('backupNamePlaceholder'))}" style="flex:1;min-width:180px">
+            <button type="button" class="btn" id="btnCreateBackup">${tr('createBackup')}</button>
+          </div>
+        </div>
+        <div class="field" style="margin-top:14px">
           <label for="sArchiveList">${tr('restoreArchive')}</label>
           <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
             <select id="sArchiveList" style="flex:1;min-width:180px">
               <option value="">${tr('loading')}</option>
             </select>
             <button type="button" class="btn" id="btnRestoreArchive">${tr('restoreSelected')}</button>
+            <button type="button" class="btn" id="btnDeleteArchive">${tr('deleteArchive')}</button>
           </div>
         </div>
       </div>
@@ -5568,65 +5600,100 @@ function renderSettings() {
     }
   });
   $('btnCleanDatabase')?.addEventListener('click', async () => {
-    const ok =
-      confirm(
-        'Clean database?\n\nDeletes ALL clients, projects, tasks and sessions.\nLogos and studio profile are kept.\nA backup is saved to archive first.'
-      ) && confirm('Confirm wipe of clients/projects/sessions?');
+    const ok = confirm(tr('cleanDatabaseConfirm')) && confirm(tr('cleanDatabaseConfirm2'));
     if (!ok) return;
     try {
       await cleanDatabase({ reseed: false });
-      alert('Database cleaned. Musomo Tracker data is empty — logos kept. Backup is in archive.');
+      alert(tr('cleanDatabaseDone'));
       renderSettings();
     } catch (err) {
-      alert(`Clean failed: ${String(err?.message || err)}`);
+      alert(tr('cleanDatabaseFailed', { error: String(err?.message || err) }));
     }
   });
   $('btnRestoreDemo')?.addEventListener('click', async () => {
-    const ok = confirm(
-      'Restore demo data?\n\nWipes current clients/projects/sessions (logos kept), archives first, then loads sample data.'
-    );
+    const ok = confirm(tr('restoreDemoConfirm'));
     if (!ok) return;
     try {
       await cleanDatabase({ reseed: true });
-      alert('Demo data restored. Logos kept. Previous data archived.');
+      alert(tr('restoreDemoDone'));
       renderSettings();
     } catch (err) {
-      alert(`Restore failed: ${String(err?.message || err)}`);
+      alert(tr('restoreDemoFailed', { error: String(err?.message || err) }));
     }
   });
 
   const archiveSelect = $('sArchiveList');
-  void (async () => {
+  let archiveEntries = [];
+  const refreshArchiveList = async (selectName) => {
     if (!archiveSelect) return;
     try {
-      const names = await invoke('tracker_list_archives');
-      if (!names?.length) {
-        archiveSelect.innerHTML = `<option value="">No archives yet</option>`;
+      archiveEntries = (await invoke('tracker_list_archives')) || [];
+      if (!archiveEntries.length) {
+        archiveSelect.innerHTML = `<option value="">${tr('noArchivesYet')}</option>`;
         return;
       }
-      archiveSelect.innerHTML = names
-        .map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`)
+      archiveSelect.innerHTML = archiveEntries
+        .map(entry => {
+          const display = formatArchiveOptionLabel(entry);
+          return `<option value="${escapeHtml(entry.name)}"${entry.name === selectName ? ' selected' : ''}>${escapeHtml(display)}</option>`;
+        })
         .join('');
     } catch (err) {
-      archiveSelect.innerHTML = `<option value="">Could not list archives</option>`;
+      archiveEntries = [];
+      archiveSelect.innerHTML = `<option value="">${tr('archivesListFailed')}</option>`;
       console.warn(err);
     }
-  })();
+  };
+  void refreshArchiveList();
+  $('btnCreateBackup')?.addEventListener('click', async () => {
+    const label = String($('sBackupName')?.value || '').trim();
+    if (!label) {
+      alert(tr('backupNameRequired'));
+      return;
+    }
+    try {
+      const name = await invoke('tracker_create_backup', { label });
+      $('sBackupName').value = '';
+      await refreshArchiveList(name);
+      alert(tr('backupCreated', { name }));
+    } catch (err) {
+      alert(tr('backupCreateFailed', { error: String(err?.message || err) }));
+    }
+  });
   $('btnRestoreArchive')?.addEventListener('click', async () => {
     const name = String(archiveSelect?.value || '').trim();
     if (!name) {
-      alert('Select an archive first.');
+      alert(tr('selectArchiveFirst'));
       return;
     }
-    const ok = confirm(
-      `Restore archive?\n\n${name}\n\nReplaces clients/projects/tasks/sessions. Logos/settings stay as they are now.`
-    );
+    const entry = archiveEntries.find(item => item.name === name);
+    const display = formatArchiveOptionLabel(entry || { name });
+    const ok = confirm(tr('restoreArchiveConfirm', { name: display }));
     if (!ok) return;
     try {
       await restoreArchive(name);
-      alert('Archive restored.');
+      alert(tr('archiveRestored'));
+      await refreshArchiveList();
     } catch (err) {
-      alert(`Restore failed: ${String(err?.message || err)}`);
+      alert(tr('restoreFailed', { error: String(err?.message || err) }));
+    }
+  });
+  $('btnDeleteArchive')?.addEventListener('click', async () => {
+    const name = String(archiveSelect?.value || '').trim();
+    if (!name) {
+      alert(tr('selectArchiveFirst'));
+      return;
+    }
+    const entry = archiveEntries.find(item => item.name === name);
+    const display = formatArchiveOptionLabel(entry || { name });
+    const ok = confirm(tr('deleteArchiveConfirm', { name: display }));
+    if (!ok) return;
+    try {
+      await invoke('tracker_delete_archive', { name });
+      await refreshArchiveList();
+      alert(tr('archiveDeleted'));
+    } catch (err) {
+      alert(tr('deleteArchiveFailed', { error: String(err?.message || err) }));
     }
   });
 }
@@ -5952,6 +6019,43 @@ async function openMini() {
   }
 }
 
+async function closeMini() {
+  try {
+    const runtime = await runtimeGetTimerState();
+    if (runtime?.pendingCommit && Number(runtime.pendingCommit.secs) > 0) {
+      await restoreTimerRuntime();
+    }
+
+    const running = runtimeIsRunning(runtime) || !!state.timerRunning;
+    if (!running) {
+      await invoke('close_tracker_mini');
+      return;
+    }
+
+    if (closeDialogOpen) return;
+    closeDialogOpen = true;
+    try {
+      const choice = await sessionCloseChoiceDialog();
+      if (!choice) return;
+      if (choice === 'save_close') {
+        await stopTimer(true);
+        pushTimerStateToMini(true);
+      } else if (choice === 'save_pause') {
+        timerPause();
+        pushTimerStateToMini(true);
+      } else if (choice === 'discard') {
+        await invoke('tracker_discard_open_timer');
+        pushTimerStateToMini(true);
+      }
+      await invoke('close_tracker_mini');
+    } finally {
+      closeDialogOpen = false;
+    }
+  } catch (err) {
+    console.warn('closeMini', err);
+  }
+}
+
 function getAppVersion() {
   return window.MUSOMO_APP_VERSION || '1.1.0';
 }
@@ -6090,6 +6194,218 @@ function bindProjectModal() {
 function bindTaskModal() {
   $('taskModalCancel')?.addEventListener('click', closeTaskModal);
   $('taskModalSave')?.addEventListener('click', saveNewTask);
+}
+
+const CALC_PRESETS_SEC = [
+  { key: 'calcPreset5m', sec: 300 },
+  { key: 'calcPreset10m', sec: 600 },
+  { key: 'calcPreset15m', sec: 900 },
+  { key: 'calcPreset30m', sec: 1800 },
+  { key: 'calcPreset1h', sec: 3600 }
+];
+
+const calcUi = {
+  targetInputId: null,
+  display: '0',
+  stored: null,
+  op: null,
+  fresh: true,
+  wired: false
+};
+
+function calcDisplayNumber() {
+  const n = Number(calcUi.display);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function calcFormatDisplay(value) {
+  if (!Number.isFinite(value)) return '0';
+  const rounded = Math.round(value * 1e8) / 1e8;
+  return String(rounded);
+}
+
+function calcUpdateHint() {
+  const hint = $('calcHint');
+  if (!hint) return;
+  const sec = Math.max(0, Math.round(calcDisplayNumber()));
+  const min = (sec / 60).toFixed(sec % 60 === 0 && sec > 0 ? 0 : 1);
+  hint.textContent = sec > 0 ? tr('calcConversion', { sec, min }) : '';
+}
+
+function calcRenderDisplay() {
+  const el = $('calcDisplay');
+  if (el) el.textContent = calcUi.display;
+  calcUpdateHint();
+}
+
+function calcResetState() {
+  calcUi.display = '0';
+  calcUi.stored = null;
+  calcUi.op = null;
+  calcUi.fresh = true;
+  calcRenderDisplay();
+}
+
+function calcApplyOp(nextOp) {
+  const current = calcDisplayNumber();
+  if (calcUi.stored == null || calcUi.op == null) {
+    calcUi.stored = current;
+  } else if (!calcUi.fresh) {
+    calcUi.stored = calcCompute(calcUi.stored, calcUi.op, current);
+    calcUi.display = calcFormatDisplay(calcUi.stored);
+  }
+  calcUi.op = nextOp;
+  calcUi.fresh = true;
+  calcRenderDisplay();
+}
+
+function calcCompute(a, op, b) {
+  switch (op) {
+    case '+':
+      return a + b;
+    case '-':
+      return a - b;
+    case '*':
+      return a * b;
+    case '/':
+      return b === 0 ? 0 : a / b;
+    default:
+      return b;
+  }
+}
+
+function calcPressDigit(digit) {
+  if (calcUi.fresh) {
+    calcUi.display = digit === '.' ? '0.' : digit;
+    calcUi.fresh = false;
+  } else if (digit === '.' && calcUi.display.includes('.')) {
+    return;
+  } else if (digit === '.' && !calcUi.display.includes('.')) {
+    calcUi.display += '.';
+  } else {
+    calcUi.display = calcUi.display === '0' ? digit : `${calcUi.display}${digit}`;
+  }
+  calcRenderDisplay();
+}
+
+function calcPressEquals() {
+  if (calcUi.op == null || calcUi.stored == null) return;
+  const result = calcCompute(calcUi.stored, calcUi.op, calcDisplayNumber());
+  calcUi.display = calcFormatDisplay(result);
+  calcUi.stored = null;
+  calcUi.op = null;
+  calcUi.fresh = true;
+  calcRenderDisplay();
+}
+
+function calcPressClear() {
+  calcResetState();
+}
+
+function calcSetPreset(seconds) {
+  calcUi.display = String(seconds);
+  calcUi.fresh = true;
+  calcRenderDisplay();
+}
+
+function closeCalculatorPopover() {
+  $('calculatorBackdrop') && ($('calculatorBackdrop').hidden = true);
+  $('calculatorPopover') && ($('calculatorPopover').hidden = true);
+  calcUi.targetInputId = null;
+}
+
+function openCalculatorPopover(opts = {}) {
+  calcUi.targetInputId = opts.targetInputId || null;
+  calcResetState();
+  const applyBtn = $('calcApply');
+  if (applyBtn) {
+    applyBtn.textContent = calcUi.targetInputId === 'mBreak' ? tr('calculatorApplyBreak') : tr('calculatorApply');
+    applyBtn.hidden = false;
+  }
+  if ($('calculatorBackdrop')) $('calculatorBackdrop').hidden = false;
+  if ($('calculatorPopover')) $('calculatorPopover').hidden = false;
+}
+
+function applyCalculatorResult() {
+  const value = Math.max(0, Math.round(calcDisplayNumber()));
+  if (calcUi.targetInputId) {
+    const input = $(calcUi.targetInputId);
+    if (input) {
+      input.value = String(value);
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }
+  closeCalculatorPopover();
+}
+
+function buildCalculatorUi() {
+  if (calcUi.wired) return;
+  const presets = $('calcPresets');
+  if (presets) {
+    presets.innerHTML = CALC_PRESETS_SEC.map(
+      p => `<button type="button" data-sec="${p.sec}">${escapeHtml(tr(p.key))}</button>`
+    ).join('');
+    presets.querySelectorAll('button[data-sec]').forEach(btn => {
+      btn.addEventListener('click', () => calcSetPreset(Number(btn.dataset.sec)));
+    });
+  }
+  const keys = [
+    { label: 'C', action: 'clear', className: 'is-op' },
+    { label: '÷', action: 'op', op: '/', className: 'is-op' },
+    { label: '×', action: 'op', op: '*', className: 'is-op' },
+    { label: '−', action: 'op', op: '-', className: 'is-op' },
+    { label: '7', action: 'digit', digit: '7' },
+    { label: '8', action: 'digit', digit: '8' },
+    { label: '9', action: 'digit', digit: '9' },
+    { label: '+', action: 'op', op: '+', className: 'is-op' },
+    { label: '4', action: 'digit', digit: '4' },
+    { label: '5', action: 'digit', digit: '5' },
+    { label: '6', action: 'digit', digit: '6' },
+    { label: '=', action: 'eq', className: 'is-eq' },
+    { label: '1', action: 'digit', digit: '1' },
+    { label: '2', action: 'digit', digit: '2' },
+    { label: '3', action: 'digit', digit: '3' },
+    { label: '0', action: 'digit', digit: '0', wide: true },
+    { label: '.', action: 'digit', digit: '.' }
+  ];
+  const keysEl = $('calcKeys');
+  if (keysEl) {
+    keysEl.innerHTML = keys
+      .map(k => {
+        const cls = k.className ? ` class="${k.className}"` : '';
+        const style = k.wide ? ' style="grid-column: span 3"' : '';
+        return `<button type="button"${cls} data-action="${k.action}"${k.digit ? ` data-digit="${k.digit}"` : ''}${k.op ? ` data-op="${k.op}"` : ''}${style}>${escapeHtml(k.label)}</button>`;
+      })
+      .join('');
+    keysEl.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const action = btn.dataset.action;
+        if (action === 'clear') calcPressClear();
+        else if (action === 'eq') calcPressEquals();
+        else if (action === 'op') calcApplyOp(btn.dataset.op);
+        else if (action === 'digit') calcPressDigit(btn.dataset.digit);
+      });
+    });
+  }
+  $('calcApply')?.addEventListener('click', applyCalculatorResult);
+  $('calculatorBackdrop')?.addEventListener('click', closeCalculatorPopover);
+  document.addEventListener('keydown', e => {
+    if ($('calculatorPopover')?.hidden) return;
+    if (e.key === 'Escape') closeCalculatorPopover();
+  });
+  calcUi.wired = true;
+}
+
+function bindCalculator() {
+  buildCalculatorUi();
+  $('btnCalculator')?.addEventListener('click', e => {
+    e.stopPropagation();
+    openCalculatorPopover();
+  });
+  $('btnBreakCalculator')?.addEventListener('click', e => {
+    e.stopPropagation();
+    openCalculatorPopover({ targetInputId: 'mBreak' });
+  });
 }
 
 function bindTopbar() {
@@ -6409,6 +6725,7 @@ async function init() {
   bindQuickActions();
   bindAboutHelpModals();
   bindTopbar();
+  bindCalculator();
   bindClientModal();
   bindProjectModal();
   bindTaskModal();

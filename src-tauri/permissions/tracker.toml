@@ -15,6 +15,8 @@ commands.allow = [
     "tracker_init",
     "tracker_reset_database",
     "tracker_list_archives",
+    "tracker_create_backup",
+    "tracker_delete_archive",
     "tracker_restore_archive",
     "tracker_upsert_client",
     "tracker_delete_client",

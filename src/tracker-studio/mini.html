@@ -13,14 +13,15 @@
       font-display: swap;
     }
     :root {
-      --bg: #0f172a;
-      --panel: #111827;
-      --text: #f8fafc;
-      --muted: #94a3b8;
+      --bg: #0f1117;
+      --panel: #171a21;
+      --panel-2: #1c2029;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
       --accent: #22c55e;
       --accent-dark: #16a34a;
       --paused: #fbbf24;
-      --border: rgba(148, 163, 184, 0.25);
+      --border: #2a3140;
       --font: "Inter Variable", Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
       --font-weight-regular: 400;
       --font-weight-medium: 500;
@@ -93,17 +94,24 @@
       flex: 1;
       min-height: 0;
     }
+    .mini__footer {
+      margin-top: auto;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      -webkit-app-region: no-drag;
+    }
     .mini__actions {
       display: flex;
       gap: 6px;
-      margin-top: auto;
       -webkit-app-region: no-drag;
     }
     .mini__actions button {
       -webkit-app-region: no-drag;
       flex: 1;
       border: 1px solid var(--border);
-      background: #1e293b;
+      background: var(--panel-2);
       color: var(--text);
       border-radius: 8px;
       padding: 7px 6px;
@@ -118,6 +126,23 @@
       color: #052e16;
     }
     .mini__actions button:hover { filter: brightness(1.05); }
+    .mini__close {
+      -webkit-app-region: no-drag;
+      margin-top: 4px;
+      width: 100%;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--muted);
+      border-radius: 8px;
+      padding: 6px 8px;
+      font-weight: var(--font-weight-medium);
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .mini__close:hover {
+      background: var(--panel-2);
+      color: var(--text);
+    }
   </style>
 </head>
 <body>
@@ -129,14 +154,17 @@
       <div class="mini__time" id="time">00:00:00</div>
       <div class="mini__status" id="status" data-state="stopped">Stopped</div>
     </div>
-    <div class="mini__actions">
-      <button type="button" id="btnPause">Pause</button>
-      <button type="button" id="btnStop">Stop</button>
-      <button type="button" class="primary" id="btnExpand">Main</button>
+    <div class="mini__footer">
+      <div class="mini__actions">
+        <button type="button" id="btnPause">Pause</button>
+        <button type="button" id="btnStop">Stop</button>
+        <button type="button" class="primary" id="btnExpand">Main</button>
+      </div>
+      <button type="button" class="mini__close" id="btnCloseMini" data-i18n="closeMiniTimerLink">Close mini timer</button>
     </div>
   </div>
   <script src="../i18n/locales.js"></script>
   <script src="../i18n/runtime.js"></script>
-  <script src="./mini.js?v=1.1.0"></script>
+  <script src="./mini.js?v=1.1.3"></script>
 </body>
 </html>

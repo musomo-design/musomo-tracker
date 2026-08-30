@@ -304,19 +304,51 @@ function bindCloseGuard() {
   }
 }
 
+async function handleCloseMiniButton() {
+  let runtime = null;
+  try {
+    runtime = await invoke('tracker_get_timer_state');
+    applyStudioState(runtime);
+  } catch (_) {
+    /* ignore */
+  }
+
+  const running = runtimeIsRunning(runtime) || (state.running && !state.stopLocked);
+  if (!running) {
+    await closeMiniWindow();
+    return;
+  }
+
+  if (closeDialogOpen) return;
+  closeDialogOpen = true;
+  try {
+    const choice = await sessionCloseChoiceDialog();
+    if (!choice) return;
+    if (choice === 'save_close') {
+      await stopSessionFromMini();
+    } else if (choice === 'save_pause') {
+      await pauseSessionFromMini();
+    } else if (choice === 'discard') {
+      await discardOpenTimer();
+    }
+    await closeMiniWindow();
+  } finally {
+    closeDialogOpen = false;
+  }
+}
+
 async function closeMiniWindow() {
-  allowMiniClose = true;
   try {
     const getWin = window.__TAURI__?.webviewWindow?.getCurrentWebviewWindow;
     if (typeof getWin === 'function') {
       const win = getWin();
-      if (win?.close) {
-        await win.close();
+      if (win?.hide) {
+        await win.hide();
         return;
       }
     }
   } catch (_) {
-    /* fall through to Rust close */
+    /* fall through to Rust hide */
   }
   try {
     await invoke('close_tracker_mini');
@@ -448,6 +480,13 @@ function bindControls() {
       alert(String(err?.message || err));
     });
   });
+
+  $('btnCloseMini')?.addEventListener('pointerdown', onButtonPointerDown);
+  $('btnCloseMini')?.addEventListener('click', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    void handleCloseMiniButton();
+  });
 }
 
 document.addEventListener('visibilitychange', () => {
@@ -460,6 +499,8 @@ window.setInterval(() => {
 
 void (async () => {
   await window.MusomoI18n?.initLocale?.();
+  const closeBtn = $('btnCloseMini');
+  if (closeBtn) closeBtn.textContent = tr('closeMiniTimerLink');
   bindControls();
   bindStudioEvents();
   bindCloseGuard();

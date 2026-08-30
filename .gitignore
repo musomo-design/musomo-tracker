@@ -50,5 +50,7 @@ master per github screenshot/
 # IDE
 .idea/
 .vscode/
+.cursor-tmp/
 *.swp
 *~
+*.bak

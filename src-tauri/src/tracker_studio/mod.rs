@@ -4,8 +4,8 @@ mod db;
 mod types;
 
 use types::{
-    TrackerClient, TrackerModuleSettings, TrackerProject, TrackerSession, TrackerSnapshot,
-    TrackerTask,
+    TrackerArchiveEntry, TrackerClient, TrackerModuleSettings, TrackerProject, TrackerSession,
+    TrackerSnapshot, TrackerTask,
 };
 
 /// Primary app window (configured in tauri.conf.json).
@@ -57,7 +57,7 @@ pub fn open_tracker_mini(app: tauri::AppHandle) -> Result<(), String> {
 pub fn close_tracker_mini(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
     if let Some(window) = app.get_webview_window(MINI_LABEL) {
-        window.close().map_err(|e| e.to_string())?;
+        window.hide().map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -78,8 +78,18 @@ pub fn tracker_reset_database(reseed: bool) -> Result<TrackerSnapshot, String> {
 }
 
 #[tauri::command]
-pub fn tracker_list_archives() -> Result<Vec<String>, String> {
+pub fn tracker_list_archives() -> Result<Vec<TrackerArchiveEntry>, String> {
     db::list_archives()
+}
+
+#[tauri::command]
+pub fn tracker_create_backup(label: String) -> Result<String, String> {
+    db::create_named_backup(label)
+}
+
+#[tauri::command]
+pub fn tracker_delete_archive(name: String) -> Result<(), String> {
+    db::delete_archive(name)
 }
 
 #[tauri::command]
@@ -172,6 +182,7 @@ fn open_tracker_mini_window(app: &tauri::AppHandle) -> Result<(), String> {
     use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
     if let Some(window) = app.get_webview_window(MINI_LABEL) {
+        let _ = window.set_size(tauri::LogicalSize::new(320.0, 248.0));
         window.show().map_err(|e| e.to_string())?;
         window.unminimize().map_err(|e| e.to_string())?;
         window.set_focus().map_err(|e| e.to_string())?;
@@ -186,8 +197,8 @@ fn open_tracker_mini_window(app: &tauri::AppHandle) -> Result<(), String> {
         WebviewUrl::App("tracker-studio/mini.html".into()),
     )
     .title("Musomo Tracker")
-    .inner_size(320.0, 210.0)
-    .min_inner_size(280.0, 180.0)
+    .inner_size(320.0, 248.0)
+    .min_inner_size(280.0, 220.0)
     .resizable(true)
     .always_on_top(true)
     .build()

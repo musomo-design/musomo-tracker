@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <rect x="9" y="4" width="46" height="56" rx="4.05" ry="4.05" fill="none" stroke="#111827" stroke-miterlimit="10" stroke-width="3"/>
+  <line x1="9" y1="13.86" x2="55" y2="13.86" fill="none" stroke="#111827" stroke-miterlimit="10" stroke-width="3"/>
+  <circle cx="18.68" cy="23.57" r="3.63" fill="none" stroke="#111827" stroke-miterlimit="10" stroke-width="2"/>
+  <circle cx="31.53" cy="23.57" r="3.63" fill="none" stroke="#111827" stroke-miterlimit="10" stroke-width="2"/>
+  <circle cx="44.38" cy="23.57" r="3.63" fill="none" stroke="#111827" stroke-miterlimit="10" stroke-width="2"/>
+  <circle cx="18.68" cy="36.8" r="3.63" fill="none" stroke="#111827" stroke-miterlimit="10" stroke-width="2"/>
+  <circle cx="31.53" cy="36.8" r="3.63" fill="none" stroke="#111827" stroke-miterlimit="10" stroke-width="2"/>
+  <circle cx="44.38" cy="36.8" r="3.63" fill="none" stroke="#111827" stroke-miterlimit="10" stroke-width="2"/>
+  <circle cx="18.68" cy="50.03" r="3.63" fill="none" stroke="#111827" stroke-miterlimit="10" stroke-width="2"/>
+  <circle cx="31.53" cy="50.03" r="3.63" fill="none" stroke="#111827" stroke-miterlimit="10" stroke-width="2"/>
+  <line x1="40.75" y1="52.07" x2="48.84" y2="52.07" fill="none" stroke="#111827" stroke-miterlimit="10" stroke-width="2"/>
+  <line x1="40.75" y1="48.73" x2="48.84" y2="48.73" fill="none" stroke="#111827" stroke-miterlimit="10" stroke-width="2"/>
+</svg>

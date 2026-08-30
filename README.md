@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>Version 1.1.0</strong>
+  <strong>Version 1.1.3</strong>
 </p>
 
 <p align="center">
@@ -26,6 +26,15 @@
 ---
 
 Musomo Tracker helps you manage clients, projects, and billable time — without cloud accounts or subscriptions. All data stays on your device in a local SQLite database.
+
+## What's new in 1.1.3
+
+- **Backup & archive** — manual named backups, automatic safety copies before destructive ops (last 10 kept), delete selected backup, readable restore labels
+- **Full restore** — archive and demo restore bring back the complete studio profile (company, logos, header/footer); clean database still keeps your current branding
+- **Mini Timer** — close button shows save dialog when timer is running; immediate hide when paused or stopped
+- **Calculator** — quick math popup with time presets for break (sec) in manual sessions
+- **UI polish** — dark charcoal theme consistency, clients table alignment, sidebar nav in dark mode
+- **App icon** — new dark full-bleed icon (green **m** on charcoal)
 
 ## What's new in 1.1.0
 
@@ -124,7 +133,19 @@ Includes `tracker.db`, automatic backups in `archives/`, and brand assets in `as
 
 ## Backup & Restore
 
-From **Settings → Data**: clean database (with automatic archive), restore from archive, restore demo data, or refresh from the local database.
+From **Settings → Data**:
+
+- **Manual backup** — name your snapshot; files live in `archives/` on this Mac
+- **Automatic backup** — created before clean, demo restore, or archive restore; stored in `archives/auto/` (last 10 kept)
+- **Restore from archive** — full studio snapshot including branding; a safety backup is created first
+- **Clean database** — wipes clients/projects/tasks/sessions only; keeps your current profile and logos
+- **Restore demo** — loads the Northstar demo profile (data + settings)
+
+Regenerate app icons after updating `src/tracker-studio/asset/tracker-app-icon.png`:
+
+```bash
+npm run icons:generate
+```
 
 ## Build from source
 
@@ -141,7 +162,7 @@ Release artifacts can be staged with:
 
 ```bash
 bash scripts/stage-dist.sh
-# Output: dist/v1.1.0/
+# Output: dist/v1.1.3/
 ```
 
 Signed and notarized macOS builds run via GitHub Actions (`.github/workflows/macos-build-notarize.yml`).

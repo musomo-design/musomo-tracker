@@ -175,6 +175,14 @@ pub struct TrackerInheritedSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TrackerArchiveEntry {
+    pub name: String,
+    pub label: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TrackerSnapshot {
     pub clients: Vec<TrackerClient>,
     pub projects: Vec<TrackerProject>,
