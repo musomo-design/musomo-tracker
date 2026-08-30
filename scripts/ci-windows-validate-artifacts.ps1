@@ -1,7 +1,11 @@
 # Validate Musomo Tracker Windows NSIS build artifacts.
 $ErrorActionPreference = "Stop"
 
-$expectedVersion = "1.0.21"
+$packageJsonPath = Join-Path $PSScriptRoot ".." "package.json"
+$expectedVersion = (Get-Content $packageJsonPath -Raw | ConvertFrom-Json).version
+if (-not $expectedVersion) {
+  throw "Could not read version from $packageJsonPath"
+}
 $bundleDir = Join-Path $PSScriptRoot ".." "src-tauri" "target" "release" "bundle"
 $releaseDir = Join-Path $PSScriptRoot ".." "src-tauri" "target" "release"
 $nsisDir = Join-Path $bundleDir "nsis"
