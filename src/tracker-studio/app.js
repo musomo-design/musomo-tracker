@@ -1109,6 +1109,10 @@ function parseClockToSeconds(value) {
     const hh = Number(m[1]);
     const mm = Number(m[2]);
     const ss = Number(m[3]);
+    if (hh === 24) {
+      if (mm !== 0 || ss !== 0) return null;
+      return 24 * 3600;
+    }
     if (hh > 23 || mm > 59 || ss > 59) return null;
     return hh * 3600 + mm * 60 + ss;
   }
@@ -1128,8 +1132,10 @@ function parseClockToMinutes(value) {
 
 /** Store format HH:MM:SS from total seconds. */
 function formatClockValueSec(totalSec) {
+  const rounded = Math.round(Number(totalSec) || 0);
+  if (rounded === 24 * 3600) return '24:00:00';
   const day = 24 * 3600;
-  let s = Math.round(Number(totalSec) || 0) % day;
+  let s = rounded % day;
   if (s < 0) s += day;
   const hh = Math.floor(s / 3600);
   const mm = Math.floor((s % 3600) / 60);
@@ -1184,8 +1190,11 @@ function endClockFromParts(start, durationSec, breakSec) {
 }
 
 function formatClockDisplay(value) {
+  const text = String(value || '').trim();
+  if (text === '24:00:00' || text === '24.00.00') return '24.00.00';
   const secs = parseClockToSeconds(value);
   if (secs == null) return '—';
+  if (secs === 24 * 3600) return '24.00.00';
   return formatHmsDisplay(secs);
 }
 
@@ -3040,8 +3049,8 @@ function openSessionEditor(sessionOrDefaults = null) {
   if (saveBtn) saveBtn.textContent = isEdit ? tr('saveChanges') : tr('addEntry');
   if (subtitle) {
     subtitle.textContent = isEdit
-      ? 'Change times, or change Project to move this session.'
-      : 'Creates a new session. Timer also creates sessions when stopped.';
+      ? 'Billable time = (End − Start) − Break. Change project to move this session.'
+      : 'Set start and end (HH:MM:SS, 24h). Break optional. Billable = (End − Start) − Break.';
   }
   if (select) {
     select.innerHTML = state.projects.items
@@ -3056,12 +3065,14 @@ function openSessionEditor(sessionOrDefaults = null) {
   const projectId = base.projectId || state.projects.detailId || state.timer.projectId;
   if (select && projectId) select.value = projectId;
   if ($('mDate')) $('mDate').value = base.date || todayIsoDate();
-  if ($('mStart')) $('mStart').value = normalizeClockString(base.start) || '';
-  if ($('mEnd')) $('mEnd').value = normalizeClockString(base.end) || '';
-  if ($('mBreak')) $('mBreak').value = base.breakMin ?? 0;
-  const durSec =
-    durationFromClocks(base.start, base.end, base.breakMin) ??
-    Math.max(0, Number(base.durationMin) || 0);
+  setManualClockField('mStart', normalizeClockString(base.start) || '');
+  setManualClockField('mEnd', normalizeClockString(base.end) || '');
+  setManualClockField('mBreak', formatClockValueSec(base.breakMin ?? 0));
+  let durSec = Math.max(0, Number(base.durationMin) || 0);
+  if (base.start && base.end) {
+    const fromClocks = durationFromClocks(base.start, base.end, base.breakMin);
+    if (fromClocks != null) durSec = fromClocks;
+  }
   if ($('mHours')) $('mHours').value = Math.floor(durSec / 3600);
   if ($('mMinutes')) $('mMinutes').value = Math.floor((durSec % 3600) / 60);
   if ($('mNote')) $('mNote').value = base.description || '';
@@ -3072,6 +3083,7 @@ function openSessionEditor(sessionOrDefaults = null) {
         ? Number(base.cost) / (durSec / 3600)
         : clientRateForProject(projectId);
   if ($('mRate')) $('mRate').value = rateFromSession || '';
+  syncManualEntryBillableFromWindow();
   modal.hidden = false;
 }
 
@@ -3875,7 +3887,6 @@ function openManualEntryModal() {
   openSessionEditor({
     projectId: state.timer.projectId,
     date: todayIsoDate(),
-    durationMin: 3600,
     breakMin: 0,
     description: ''
   });
@@ -3887,28 +3898,227 @@ function closeManualEntryModal() {
   if (modal) modal.hidden = true;
 }
 
+function manualEntrySpanSec() {
+  return spanSeconds(clockFieldValue('mStart'), clockFieldValue('mEnd'));
+}
+
+function validateManualEntryBreak(breakSec, spanSec) {
+  if (breakSec > 0 && spanSec != null && breakSec > spanSec) {
+    alert('Break cannot be longer than the time between start and end.');
+    return false;
+  }
+  return true;
+}
+
+function breakSecFromInput() {
+  return parseClockToSeconds(clockFieldValue('mBreak')) ?? 0;
+}
+
+function fixedClockDigits(value) {
+  return String(value || '').replace(/\D/g, '').slice(0, 6);
+}
+
+function fixedClockDisplayFromDigits(digits) {
+  const d = fixedClockDigits(digits);
+  const ch = i => d[i] || '';
+  return `${ch(0)}${ch(1)}:${ch(2)}${ch(3)}:${ch(4)}${ch(5)}`;
+}
+
+function fixedClockValueFromDigits(digits) {
+  const d = fixedClockDigits(digits);
+  if (d.length < 6) return '';
+  return `${d.slice(0, 2)}:${d.slice(2, 4)}:${d.slice(4, 6)}`;
+}
+
+function fixedClockDigitIndexFromCursor(pos) {
+  if (pos <= 2) return Math.min(Math.max(pos, 0), 2);
+  if (pos <= 5) return Math.min(Math.max(pos - 1, 0), 4);
+  return Math.min(Math.max(pos - 2, 0), 6);
+}
+
+function fixedClockCursorFromDigitIndex(idx) {
+  const i = Math.max(0, Math.min(6, idx));
+  if (i <= 2) return i;
+  if (i <= 4) return i + 1;
+  return i + 2;
+}
+
+function getFixedClockDigits(el) {
+  return el?.dataset.clockDigits || '';
+}
+
+function setFixedClockDigits(el, digits) {
+  if (!el) return;
+  const d = fixedClockDigits(digits);
+  el.dataset.clockDigits = d;
+  el.value = d.length ? fixedClockDisplayFromDigits(d) : '';
+}
+
+function clockFieldValue(id) {
+  const el = $(id);
+  if (!el) return '';
+  const fromDigits = fixedClockValueFromDigits(getFixedClockDigits(el));
+  if (fromDigits) return normalizeClockString(fromDigits) || fromDigits;
+  return normalizeClockString(el.value) || '';
+}
+
+function setManualClockField(id, value) {
+  const el = $(id);
+  if (!el) return;
+  const normalized = value ? normalizeClockString(value) || '' : '';
+  if (!normalized) {
+    el.dataset.clockDigits = '';
+    el.value = '';
+    return;
+  }
+  el.dataset.clockDigits = normalized.replace(/\D/g, '').slice(0, 6);
+  el.value = normalized;
+}
+
+function bindFixedClockInput(el, syncFn) {
+  if (!el || el.dataset.fixedClockBound) return;
+  el.dataset.fixedClockBound = '1';
+
+  el.addEventListener('focus', () => {
+    const d = getFixedClockDigits(el);
+    el.value = d.length ? fixedClockDisplayFromDigits(d) : '  :  :  ';
+    const pos = fixedClockCursorFromDigitIndex(d.length);
+    requestAnimationFrame(() => el.setSelectionRange(pos, pos));
+  });
+
+  el.addEventListener('keydown', e => {
+    if (e.key === 'Tab' || e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End') return;
+    if (e.ctrlKey || e.metaKey) return;
+
+    if (e.key.length === 1 && /\d/.test(e.key)) {
+      e.preventDefault();
+      let d = getFixedClockDigits(el);
+      if (d.length >= 6) return;
+      d += e.key;
+      setFixedClockDigits(el, d);
+      el.value = fixedClockDisplayFromDigits(d);
+      const pos = fixedClockCursorFromDigitIndex(d.length);
+      el.setSelectionRange(pos, pos);
+      syncFn();
+      return;
+    }
+
+    if (e.key === 'Backspace') {
+      e.preventDefault();
+      const d = getFixedClockDigits(el).slice(0, -1);
+      setFixedClockDigits(el, d);
+      if (d.length) el.value = fixedClockDisplayFromDigits(d);
+      const pos = fixedClockCursorFromDigitIndex(d.length);
+      el.setSelectionRange(pos, pos);
+      syncFn();
+      return;
+    }
+
+    if (e.key === 'Delete') {
+      e.preventDefault();
+      setFixedClockDigits(el, '');
+      syncFn();
+      return;
+    }
+
+    if (e.key.length === 1) e.preventDefault();
+  });
+
+  el.addEventListener('paste', e => {
+    e.preventDefault();
+    const text = (e.clipboardData?.getData('text') || '').replace(/\D/g, '').slice(0, 6);
+    setFixedClockDigits(el, text);
+    if (text.length) el.value = fixedClockDisplayFromDigits(text);
+    syncFn();
+  });
+
+  el.addEventListener('click', () => {
+    requestAnimationFrame(() => {
+      const pos = el.selectionStart ?? 0;
+      const idx = fixedClockDigitIndexFromCursor(pos);
+      const d = getFixedClockDigits(el);
+      const newPos = fixedClockCursorFromDigitIndex(Math.min(idx, d.length));
+      el.setSelectionRange(newPos, newPos);
+    });
+  });
+
+  el.addEventListener('blur', () => {
+    normalizeManualEntryClockField(el.id);
+    syncFn();
+  });
+}
+
+function normalizeManualEntryClockField(id) {
+  const el = $(id);
+  if (!el) return;
+  const d = getFixedClockDigits(el);
+  if (d.length === 6) {
+    const normalized = normalizeClockString(fixedClockValueFromDigits(d));
+    if (normalized) {
+      setManualClockField(id, normalized);
+      return;
+    }
+  }
+  if (id === 'mBreak') setManualClockField('mBreak', '00:00:00');
+  else setManualClockField(id, '');
+}
+
+function syncManualEntryBillableFromWindow() {
+  const start = clockFieldValue('mStart');
+  const end = clockFieldValue('mEnd');
+  let breakSec = breakSecFromInput();
+  const spanSec = spanSeconds(start, end);
+  if (spanSec == null) {
+    if ($('mHours')) $('mHours').value = 0;
+    if ($('mMinutes')) $('mMinutes').value = 0;
+    return false;
+  }
+  if (breakSec > spanSec) {
+    breakSec = spanSec;
+    setManualClockField('mBreak', formatClockValueSec(spanSec));
+  }
+  const billable = Math.max(0, spanSec - breakSec);
+  if ($('mHours')) $('mHours').value = Math.floor(billable / 3600);
+  if ($('mMinutes')) $('mMinutes').value = Math.floor((billable % 3600) / 60);
+  return true;
+}
+
 async function saveManualEntry() {
   const form = $('manualEntryForm');
   if (!form) return;
   const projectId = String($('mProject')?.value || '');
   const project = state.projects.items.find(p => p.id === projectId);
-  if (!project) return;
-  let start = normalizeClockString($('mStart')?.value);
-  let end = normalizeClockString($('mEnd')?.value);
-  const breakMin = Math.max(0, Number($('mBreak')?.value) || 0);
-  let hours = Number($('mHours')?.value) || 0;
-  let mins = Number($('mMinutes')?.value) || 0;
-  let durationMin = Math.max(0, Math.round(hours * 3600 + mins * 60));
-
-  // Prefer clocks when both set; otherwise derive End from Start + duration + Break.
-  // durationMin / breakMin store seconds.
-  if (start && end) {
-    durationMin = durationFromClocks(start, end, breakMin) ?? durationMin;
-  } else if (start && durationMin > 0) {
-    end = endClockFromParts(start, durationMin, breakMin);
+  if (!project) {
+    alert('Select a project.');
+    return;
   }
-  durationMin = Math.max(1, durationMin);
 
+  normalizeManualEntryClockField('mStart');
+  normalizeManualEntryClockField('mEnd');
+  normalizeManualEntryClockField('mBreak');
+  syncManualEntryBillableFromWindow();
+
+  const start = clockFieldValue('mStart');
+  const end = clockFieldValue('mEnd');
+  const breakMin = breakSecFromInput();
+
+  if (!start || !end) {
+    alert('Enter both start and end times.');
+    return;
+  }
+
+  const spanSec = spanSeconds(start, end);
+  if (spanSec == null || spanSec < 1) {
+    alert('End must be after start.');
+    return;
+  }
+  if (!validateManualEntryBreak(breakMin, spanSec)) return;
+
+  const durationMin = spanSec - breakMin;
+  if (durationMin < 1) {
+    alert('No billable time left after break. Reduce break or widen start/end.');
+    return;
+  }
   const rateRaw = $('mRate')?.value;
   const rate =
     rateRaw !== '' && rateRaw != null && Number.isFinite(Number(rateRaw))
@@ -6196,218 +6406,6 @@ function bindTaskModal() {
   $('taskModalSave')?.addEventListener('click', saveNewTask);
 }
 
-const CALC_PRESETS_SEC = [
-  { key: 'calcPreset5m', sec: 300 },
-  { key: 'calcPreset10m', sec: 600 },
-  { key: 'calcPreset15m', sec: 900 },
-  { key: 'calcPreset30m', sec: 1800 },
-  { key: 'calcPreset1h', sec: 3600 }
-];
-
-const calcUi = {
-  targetInputId: null,
-  display: '0',
-  stored: null,
-  op: null,
-  fresh: true,
-  wired: false
-};
-
-function calcDisplayNumber() {
-  const n = Number(calcUi.display);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function calcFormatDisplay(value) {
-  if (!Number.isFinite(value)) return '0';
-  const rounded = Math.round(value * 1e8) / 1e8;
-  return String(rounded);
-}
-
-function calcUpdateHint() {
-  const hint = $('calcHint');
-  if (!hint) return;
-  const sec = Math.max(0, Math.round(calcDisplayNumber()));
-  const min = (sec / 60).toFixed(sec % 60 === 0 && sec > 0 ? 0 : 1);
-  hint.textContent = sec > 0 ? tr('calcConversion', { sec, min }) : '';
-}
-
-function calcRenderDisplay() {
-  const el = $('calcDisplay');
-  if (el) el.textContent = calcUi.display;
-  calcUpdateHint();
-}
-
-function calcResetState() {
-  calcUi.display = '0';
-  calcUi.stored = null;
-  calcUi.op = null;
-  calcUi.fresh = true;
-  calcRenderDisplay();
-}
-
-function calcApplyOp(nextOp) {
-  const current = calcDisplayNumber();
-  if (calcUi.stored == null || calcUi.op == null) {
-    calcUi.stored = current;
-  } else if (!calcUi.fresh) {
-    calcUi.stored = calcCompute(calcUi.stored, calcUi.op, current);
-    calcUi.display = calcFormatDisplay(calcUi.stored);
-  }
-  calcUi.op = nextOp;
-  calcUi.fresh = true;
-  calcRenderDisplay();
-}
-
-function calcCompute(a, op, b) {
-  switch (op) {
-    case '+':
-      return a + b;
-    case '-':
-      return a - b;
-    case '*':
-      return a * b;
-    case '/':
-      return b === 0 ? 0 : a / b;
-    default:
-      return b;
-  }
-}
-
-function calcPressDigit(digit) {
-  if (calcUi.fresh) {
-    calcUi.display = digit === '.' ? '0.' : digit;
-    calcUi.fresh = false;
-  } else if (digit === '.' && calcUi.display.includes('.')) {
-    return;
-  } else if (digit === '.' && !calcUi.display.includes('.')) {
-    calcUi.display += '.';
-  } else {
-    calcUi.display = calcUi.display === '0' ? digit : `${calcUi.display}${digit}`;
-  }
-  calcRenderDisplay();
-}
-
-function calcPressEquals() {
-  if (calcUi.op == null || calcUi.stored == null) return;
-  const result = calcCompute(calcUi.stored, calcUi.op, calcDisplayNumber());
-  calcUi.display = calcFormatDisplay(result);
-  calcUi.stored = null;
-  calcUi.op = null;
-  calcUi.fresh = true;
-  calcRenderDisplay();
-}
-
-function calcPressClear() {
-  calcResetState();
-}
-
-function calcSetPreset(seconds) {
-  calcUi.display = String(seconds);
-  calcUi.fresh = true;
-  calcRenderDisplay();
-}
-
-function closeCalculatorPopover() {
-  $('calculatorBackdrop') && ($('calculatorBackdrop').hidden = true);
-  $('calculatorPopover') && ($('calculatorPopover').hidden = true);
-  calcUi.targetInputId = null;
-}
-
-function openCalculatorPopover(opts = {}) {
-  calcUi.targetInputId = opts.targetInputId || null;
-  calcResetState();
-  const applyBtn = $('calcApply');
-  if (applyBtn) {
-    applyBtn.textContent = calcUi.targetInputId === 'mBreak' ? tr('calculatorApplyBreak') : tr('calculatorApply');
-    applyBtn.hidden = false;
-  }
-  if ($('calculatorBackdrop')) $('calculatorBackdrop').hidden = false;
-  if ($('calculatorPopover')) $('calculatorPopover').hidden = false;
-}
-
-function applyCalculatorResult() {
-  const value = Math.max(0, Math.round(calcDisplayNumber()));
-  if (calcUi.targetInputId) {
-    const input = $(calcUi.targetInputId);
-    if (input) {
-      input.value = String(value);
-      input.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-  }
-  closeCalculatorPopover();
-}
-
-function buildCalculatorUi() {
-  if (calcUi.wired) return;
-  const presets = $('calcPresets');
-  if (presets) {
-    presets.innerHTML = CALC_PRESETS_SEC.map(
-      p => `<button type="button" data-sec="${p.sec}">${escapeHtml(tr(p.key))}</button>`
-    ).join('');
-    presets.querySelectorAll('button[data-sec]').forEach(btn => {
-      btn.addEventListener('click', () => calcSetPreset(Number(btn.dataset.sec)));
-    });
-  }
-  const keys = [
-    { label: 'C', action: 'clear', className: 'is-op' },
-    { label: '÷', action: 'op', op: '/', className: 'is-op' },
-    { label: '×', action: 'op', op: '*', className: 'is-op' },
-    { label: '−', action: 'op', op: '-', className: 'is-op' },
-    { label: '7', action: 'digit', digit: '7' },
-    { label: '8', action: 'digit', digit: '8' },
-    { label: '9', action: 'digit', digit: '9' },
-    { label: '+', action: 'op', op: '+', className: 'is-op' },
-    { label: '4', action: 'digit', digit: '4' },
-    { label: '5', action: 'digit', digit: '5' },
-    { label: '6', action: 'digit', digit: '6' },
-    { label: '=', action: 'eq', className: 'is-eq' },
-    { label: '1', action: 'digit', digit: '1' },
-    { label: '2', action: 'digit', digit: '2' },
-    { label: '3', action: 'digit', digit: '3' },
-    { label: '0', action: 'digit', digit: '0', wide: true },
-    { label: '.', action: 'digit', digit: '.' }
-  ];
-  const keysEl = $('calcKeys');
-  if (keysEl) {
-    keysEl.innerHTML = keys
-      .map(k => {
-        const cls = k.className ? ` class="${k.className}"` : '';
-        const style = k.wide ? ' style="grid-column: span 3"' : '';
-        return `<button type="button"${cls} data-action="${k.action}"${k.digit ? ` data-digit="${k.digit}"` : ''}${k.op ? ` data-op="${k.op}"` : ''}${style}>${escapeHtml(k.label)}</button>`;
-      })
-      .join('');
-    keysEl.querySelectorAll('button').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const action = btn.dataset.action;
-        if (action === 'clear') calcPressClear();
-        else if (action === 'eq') calcPressEquals();
-        else if (action === 'op') calcApplyOp(btn.dataset.op);
-        else if (action === 'digit') calcPressDigit(btn.dataset.digit);
-      });
-    });
-  }
-  $('calcApply')?.addEventListener('click', applyCalculatorResult);
-  $('calculatorBackdrop')?.addEventListener('click', closeCalculatorPopover);
-  document.addEventListener('keydown', e => {
-    if ($('calculatorPopover')?.hidden) return;
-    if (e.key === 'Escape') closeCalculatorPopover();
-  });
-  calcUi.wired = true;
-}
-
-function bindCalculator() {
-  buildCalculatorUi();
-  $('btnCalculator')?.addEventListener('click', e => {
-    e.stopPropagation();
-    openCalculatorPopover();
-  });
-  $('btnBreakCalculator')?.addEventListener('click', e => {
-    e.stopPropagation();
-    openCalculatorPopover({ targetInputId: 'mBreak' });
-  });
-}
-
 function bindTopbar() {
   $('btnProfile')?.addEventListener('click', () => setPage('settings'));
   $('btnRefreshData')?.addEventListener('click', async () => {
@@ -6436,38 +6434,25 @@ function bindTopbar() {
   $('globalSearch')?.addEventListener('input', e => applyGlobalSearch(e.target.value));
 }
 
+function syncManualEntryBreakField() {
+  const spanSec = manualEntrySpanSec();
+  const breakSec = breakSecFromInput();
+  if (spanSec != null && breakSec > spanSec) {
+    alert('Break cannot be longer than the time between start and end.');
+    setManualClockField('mBreak', formatClockValueSec(spanSec));
+  }
+  syncManualEntryBillableFromWindow();
+}
+
 function bindManualEntryModal() {
   $('manualEntryCancel')?.addEventListener('click', closeManualEntryModal);
   $('manualEntrySave')?.addEventListener('click', () => void saveManualEntry());
   $('moveSessionCancel')?.addEventListener('click', closeMoveSessionModal);
   $('moveSessionConfirm')?.addEventListener('click', () => void confirmMoveSession());
 
-  const syncDurationFromClocks = () => {
-    const start = $('mStart')?.value;
-    const end = $('mEnd')?.value;
-    const breakMin = Number($('mBreak')?.value) || 0;
-    const dur = durationFromClocks(start, end, breakMin);
-    if (dur == null) return;
-    if ($('mHours')) $('mHours').value = Math.floor(dur / 3600);
-    if ($('mMinutes')) $('mMinutes').value = Math.floor((dur % 3600) / 60);
-  };
-
-  const syncEndFromDuration = () => {
-    const start = $('mStart')?.value;
-    if (!normalizeClockString(start)) return;
-    const breakMin = Number($('mBreak')?.value) || 0;
-    const hours = Number($('mHours')?.value) || 0;
-    const mins = Number($('mMinutes')?.value) || 0;
-    const durationSec = Math.max(0, Math.round(hours * 3600 + mins * 60));
-    const end = endClockFromParts(start, durationSec, breakMin);
-    if (end && $('mEnd')) $('mEnd').value = end;
-  };
-
-  $('mStart')?.addEventListener('change', syncDurationFromClocks);
-  $('mEnd')?.addEventListener('change', syncDurationFromClocks);
-  $('mBreak')?.addEventListener('change', syncDurationFromClocks);
-  $('mHours')?.addEventListener('change', syncEndFromDuration);
-  $('mMinutes')?.addEventListener('change', syncEndFromDuration);
+  for (const id of ['mStart', 'mEnd', 'mBreak']) {
+    bindFixedClockInput($(id), id === 'mBreak' ? syncManualEntryBreakField : syncManualEntryBillableFromWindow);
+  }
   $('mProject')?.addEventListener('change', () => {
     if (state.sessionEditor.editingId) return;
     const projectId = $('mProject')?.value;
@@ -6725,7 +6710,6 @@ async function init() {
   bindQuickActions();
   bindAboutHelpModals();
   bindTopbar();
-  bindCalculator();
   bindClientModal();
   bindProjectModal();
   bindTaskModal();

@@ -497,131 +497,10 @@
     }
     .notifications-popover__item strong { display: block; margin-top: 2px; }
     .notifications-popover__item span { display: block; color: var(--muted); font-size: var(--text-meta-size); margin-top: 2px; }
-    .calculator-popover {
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      width: 248px;
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      box-shadow: var(--shadow);
-      z-index: 200;
-      padding: 12px;
-      display: grid;
-      gap: 10px;
-    }
-    .calculator-popover[hidden] { display: none; }
-    .calculator-popover__head {
-      font-size: var(--text-label-size);
-      font-weight: var(--font-weight-bold);
-      color: var(--text);
-    }
-    .calculator-popover__display {
-      background: var(--panel-2);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px 12px;
-      font-size: 22px;
-      font-weight: var(--font-weight-bold);
-      text-align: right;
+    .input-clock {
       font-variant-numeric: tabular-nums;
-      color: var(--text);
-      min-height: 44px;
-      line-height: 1.2;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      letter-spacing: 0.02em;
     }
-    .calculator-popover__hint {
-      font-size: var(--text-meta-size);
-      color: var(--muted);
-      text-align: center;
-      min-height: 14px;
-    }
-    .calculator-popover__presets {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-    }
-    .calculator-popover__presets button {
-      border: 1px solid var(--border);
-      background: var(--panel-2);
-      color: var(--text);
-      border-radius: 999px;
-      padding: 4px 10px;
-      font-size: var(--text-meta-size);
-      font-weight: var(--font-weight-medium);
-    }
-    .calculator-popover__presets button:hover {
-      border-color: var(--accent);
-      color: var(--accent-dark);
-    }
-    .calculator-popover__keys {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 6px;
-    }
-    .calculator-popover__keys button {
-      border: 1px solid var(--border);
-      background: var(--panel);
-      color: var(--text);
-      border-radius: 8px;
-      min-height: 36px;
-      font-size: var(--text-label-size);
-      font-weight: var(--font-weight-medium);
-    }
-    .calculator-popover__keys button:hover {
-      background: var(--panel-2);
-      border-color: #d1d5db;
-    }
-    .calculator-popover__keys button.is-op {
-      background: var(--accent-soft);
-      color: var(--accent-dark);
-    }
-    .calculator-popover__keys button.is-eq {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #052e16;
-      font-weight: var(--font-weight-bold);
-    }
-    .calculator-popover__apply {
-      width: 100%;
-    }
-    .field-with-tool {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .field-with-tool input { flex: 1; min-width: 0; }
-    .field-tool-btn {
-      width: 36px;
-      height: 36px;
-      border-radius: 8px;
-      border: 1px solid var(--border);
-      background: var(--panel);
-      display: grid;
-      place-items: center;
-      color: #4b5563;
-      flex-shrink: 0;
-    }
-    .field-tool-btn:hover { color: var(--accent-dark); border-color: var(--accent); }
-    .field-tool-btn__glyph {
-      width: 18px;
-      height: 18px;
-      display: block;
-      background-color: currentColor;
-      -webkit-mask: var(--nav-icon) center / contain no-repeat;
-      mask: var(--nav-icon) center / contain no-repeat;
-    }
-    .calculator-backdrop {
-      position: fixed;
-      inset: 0;
-      background: rgba(15, 17, 23, 0.35);
-      z-index: 199;
-    }
-    .calculator-backdrop[hidden] { display: none; }
     .kanban-card { touch-action: none; user-select: none; }
     .content {
       flex: 1;
@@ -2474,18 +2353,6 @@
     html[data-ui-theme="dark"] .icon-btn {
       color: var(--muted);
     }
-    html[data-ui-theme="dark"] .calculator-popover__presets button:hover,
-    html[data-ui-theme="dark"] .field-tool-btn:hover {
-      border-color: var(--accent);
-      color: #fff;
-    }
-    html[data-ui-theme="dark"] .calculator-popover__keys button.is-eq {
-      color: #052e16;
-    }
-    html[data-ui-theme="dark"] .field-tool-btn {
-      color: var(--muted);
-      background: var(--panel-2);
-    }
     html[data-ui-theme="dark"] .nav-item:hover {
       background: var(--accent-soft);
       color: #fff;
@@ -2661,7 +2528,7 @@
           ·
           <button type="button" id="btnAbout" data-i18n="about">About</button>
         </span>
-        <span id="appVersionBadge">v1.1.3</span>
+        <span id="appVersionBadge">v1.3.31</span>
       </div>
     </aside>
 
@@ -2677,9 +2544,6 @@
             <input type="search" id="globalSearch" data-i18n-placeholder="searchPlaceholder" placeholder="Search clients, projects…" />
           </label>
           <button type="button" class="btn" id="btnRefreshData" data-i18n="refresh" title="Reload from local database">Refresh</button>
-          <div style="position:relative">
-            <button type="button" class="icon-btn" id="btnCalculator" data-i18n-aria="calculator" aria-label="Calculator"><span class="icon-btn__glyph" style="--nav-icon: url('./asset/calculator.svg')" aria-hidden="true"></span></button>
-          </div>
           <div style="position:relative">
             <button type="button" class="icon-btn" id="btnNotifications" data-i18n-aria="notifications" aria-label="Notifications"><span class="icon-btn__glyph" style="--nav-icon: url('./asset/Bell2.svg')" aria-hidden="true"></span><span class="badge" id="notifBadge" hidden>0</span></button>
             <div class="notifications-popover" id="notificationsPopover" hidden>
@@ -2915,21 +2779,18 @@
         </div>
         <div class="field-row">
           <div class="field">
-            <label for="mStart">Start</label>
-            <input id="mStart" name="start" type="time" step="1" />
+            <label for="mStart">Start (HH:MM:SS)</label>
+            <input id="mStart" name="start" type="text" class="input-clock" inputmode="numeric" placeholder="08:30:00" autocomplete="off" spellcheck="false" />
           </div>
           <div class="field">
-            <label for="mEnd">End</label>
-            <input id="mEnd" name="end" type="time" step="1" />
+            <label for="mEnd">End (HH:MM:SS)</label>
+            <input id="mEnd" name="end" type="text" class="input-clock" inputmode="numeric" placeholder="09:10:00" autocomplete="off" spellcheck="false" />
           </div>
         </div>
         <div class="field-row">
           <div class="field">
-            <label for="mBreak">Break (sec)</label>
-            <div class="field-with-tool">
-              <input id="mBreak" name="breakMin" type="number" min="0" step="1" value="0" />
-              <button type="button" class="field-tool-btn" id="btnBreakCalculator" data-i18n-aria="calculator" aria-label="Calculator"><span class="field-tool-btn__glyph" style="--nav-icon: url('./asset/calculator.svg')" aria-hidden="true"></span></button>
-            </div>
+            <label for="mBreak">Break (HH:MM:SS)</label>
+            <input id="mBreak" name="breakMin" type="text" class="input-clock" inputmode="numeric" placeholder="00:00:00" autocomplete="off" spellcheck="false" />
           </div>
           <div class="field">
             <label for="mRate">Hourly rate</label>
@@ -2938,12 +2799,12 @@
         </div>
         <div class="field-row">
           <div class="field">
-            <label for="mHours">Hours</label>
-            <input id="mHours" name="hours" type="number" min="0" step="1" value="1" />
+            <label for="mHours">Billable hours</label>
+            <input id="mHours" name="hours" type="number" min="0" step="1" value="0" readonly tabindex="-1" />
           </div>
           <div class="field">
-            <label for="mMinutes">Minutes</label>
-            <input id="mMinutes" name="minutes" type="number" min="0" max="59" step="1" value="0" />
+            <label for="mMinutes">Billable minutes</label>
+            <input id="mMinutes" name="minutes" type="number" min="0" max="59" step="1" value="0" readonly tabindex="-1" />
           </div>
         </div>
         <div class="field">
@@ -3027,18 +2888,9 @@
       </div>
     </div>
   </div>
-  <div class="calculator-backdrop" id="calculatorBackdrop" hidden></div>
-  <div class="calculator-popover" id="calculatorPopover" hidden role="dialog" aria-labelledby="calcTitle">
-    <div class="calculator-popover__head" id="calcTitle" data-i18n="calculator">Calculator</div>
-    <div class="calculator-popover__display" id="calcDisplay">0</div>
-    <div class="calculator-popover__hint" id="calcHint"></div>
-    <div class="calculator-popover__presets" id="calcPresets"></div>
-    <div class="calculator-popover__keys" id="calcKeys"></div>
-    <button type="button" class="btn btn-primary calculator-popover__apply" id="calcApply" data-i18n="calculatorApply">Use result</button>
-  </div>
   <script src="../version.js"></script>
   <script src="../i18n/locales.js"></script>
   <script src="../i18n/runtime.js"></script>
-  <script src="./app.js?v=1.1.3"></script>
+  <script src="./app.js?v=1.3.31"></script>
 </body>
 </html>

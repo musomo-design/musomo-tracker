@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>Version 1.1.3</strong>
+  <strong>Version 1.3.31</strong>
 </p>
 
 <p align="center">
@@ -27,12 +27,18 @@
 
 Musomo Tracker helps you manage clients, projects, and billable time — without cloud accounts or subscriptions. All data stays on your device in a local SQLite database.
 
+## What's new in 1.3.31
+
+- **Manual session entry fixed** — Start/End/Break in 24h `HH:MM:SS`; billable = (End − Start) − Break
+- **Time input** — single field with fixed colons; type digits only (e.g. `083000` → `08:30:00`)
+- **Break validation** — break cannot be longer than the session window
+- **Calculator removed** — cleaner manual entry without the popup
+
 ## What's new in 1.1.3
 
 - **Backup & archive** — manual named backups, automatic safety copies before destructive ops (last 10 kept), delete selected backup, readable restore labels
 - **Full restore** — archive and demo restore bring back the complete studio profile (company, logos, header/footer); clean database still keeps your current branding
 - **Mini Timer** — close button shows save dialog when timer is running; immediate hide when paused or stopped
-- **Calculator** — quick math popup with time presets for break (sec) in manual sessions
 - **UI polish** — dark charcoal theme consistency, clients table alignment, sidebar nav in dark mode
 - **App icon** — new dark full-bleed icon (green **m** on charcoal)
 
@@ -162,7 +168,7 @@ Release artifacts can be staged with:
 
 ```bash
 bash scripts/stage-dist.sh
-# Output: dist/v1.1.3/
+# Output: dist/v1.3.31/
 ```
 
 Signed and notarized macOS builds run via GitHub Actions (`.github/workflows/macos-build-notarize.yml`).
