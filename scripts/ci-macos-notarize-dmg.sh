@@ -11,7 +11,13 @@ APPLE_API_KEY="$(printf '%s' "$APPLE_API_KEY" | tr -d '[:space:]')"
 APPLE_API_ISSUER="$(printf '%s' "$APPLE_API_ISSUER" | tr -d '[:space:]')"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BUNDLE_DIR="${CARGO_TARGET_DIR:-$ROOT/src-tauri/target}/release/bundle"
+TARGET_ROOT="${CARGO_TARGET_DIR:-$ROOT/src-tauri/target}"
+if [[ -n "${MACOS_TARGET:-}" ]]; then
+  RELEASE_DIR="$TARGET_ROOT/$MACOS_TARGET/release"
+else
+  RELEASE_DIR="$TARGET_ROOT/release"
+fi
+BUNDLE_DIR="$RELEASE_DIR/bundle"
 APP_PATH="$BUNDLE_DIR/macos/Musomo Tracker.app"
 
 shopt -s nullglob

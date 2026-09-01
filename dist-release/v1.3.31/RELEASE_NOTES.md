@@ -10,6 +10,8 @@
 ## Download
 
 - **macOS (Apple Silicon):** `Musomo Tracker_1.3.31_aarch64.dmg`
+- **macOS (Intel):** `Musomo Tracker_1.3.31_x64.dmg`
+- **Windows 10/11 (x64):** `Musomo Tracker_1.3.31_x64-setup.exe`
 
 ## Install (macOS)
 
@@ -18,3 +20,11 @@
 3. Launch the app
 
 Signed and notarized for macOS.
+
+## Install (Windows)
+
+1. Download the setup `.exe`
+2. Run the installer and follow the prompts
+3. Launch **Musomo Tracker** from the Start menu
+
+Unsigned Windows build (SmartScreen may prompt on first run).

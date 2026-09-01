@@ -2,6 +2,15 @@ name: macOS Build, Sign & Notarize
 
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: macOS build target
+        type: choice
+        options:
+          - all
+          - aarch64
+          - x86_64
+        default: all
   # Automatic push trigger disabled for initial signing/notarization testing.
   # Re-enable after the pipeline is verified:
   # push:
@@ -22,8 +31,12 @@ concurrency:
 jobs:
   macos-aarch64:
     name: macOS Apple Silicon (aarch64)
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == 'aarch64' }}
     runs-on: macos-14
     timeout-minutes: 90
+    concurrency:
+      group: macos-build-${{ github.ref }}-aarch64
+      cancel-in-progress: true
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/src-tauri/target
       # Notarization via App Store Connect API (Tauri notarytool integration).
@@ -79,6 +92,79 @@ jobs:
         with:
           name: musomo-tracker-macos-aarch64-dmg
           path: src-tauri/target/release/bundle/dmg/Musomo Tracker_*.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Cleanup signing keychain
+        if: always()
+        run: |
+          if [[ -n "${KEYCHAIN_PATH:-}" && -f "${KEYCHAIN_PATH:-/dev/null}" ]]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi
+          rm -f "${RUNNER_TEMP}/AuthKey_"*.p8 "${RUNNER_TEMP}/certificate.p12" || true
+
+  macos-x86_64:
+    name: macOS Intel (x86_64)
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == 'x86_64' }}
+    runs-on: macos-14
+    timeout-minutes: 90
+    concurrency:
+      group: macos-build-${{ github.ref }}-x86_64
+      cancel-in-progress: true
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/src-tauri/target
+      MACOS_TARGET: x86_64-apple-darwin
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Prepare signing and notarization credentials
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: bash scripts/ci-macos-prepare-signing.sh
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build, sign and notarize (Tauri)
+        env:
+          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
+        run: npm run tauri build -- --target x86_64-apple-darwin
+
+      - name: Notarize and staple DMG
+        env:
+          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
+        run: bash scripts/ci-macos-notarize-dmg.sh
+
+      - name: Validate signed and notarized artifacts
+        run: bash scripts/ci-macos-validate-artifacts.sh
+
+      - name: Upload notarized DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: musomo-tracker-macos-x86_64-dmg
+          path: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/Musomo Tracker_*.dmg
           if-no-files-found: error
           retention-days: 30
 
