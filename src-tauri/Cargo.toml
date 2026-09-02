@@ -1,6 +1,6 @@
 [package]
 name = "musomo-tracker"
-version = "1.3.31"
+version = "1.4.0"
 description = "Musomo Tracker — time tracking & billing"
 authors = ["Musomo"]
 edition = "2021"

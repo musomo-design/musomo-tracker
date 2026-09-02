@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>Version 1.3.31</strong>
+  <strong>Version 1.4.0</strong>
 </p>
 
 <p align="center">
@@ -26,6 +26,14 @@
 ---
 
 Musomo Tracker helps you manage clients, projects, and billable time — without cloud accounts or subscriptions. All data stays on your device in a local SQLite database.
+
+## What's new in 1.4.0
+
+- **Midnight timer split** — live sessions crossing midnight save as two rows (day 1 → 24:00, day 2 continues running or paused); sleep-safe wall-clock logic
+- **Overnight manual entry** — when end is before start on the same date, two sessions are created automatically
+- **Manual time input** — `HH/MM/SS` digit mask with fixed slashes; black modal backdrop
+- **Mini Timer (macOS)** — red closes with save dialog, yellow compact size, green default size; **Don't save** correctly discards the open session
+- **Timer reliability** — elapsed time from wall clock; improved sync when returning from background or sleep
 
 ## What's new in 1.3.31
 
@@ -168,7 +176,7 @@ Release artifacts can be staged with:
 
 ```bash
 bash scripts/stage-dist.sh
-# Output: dist/v1.3.31/
+# Output: dist/v1.4.0/
 ```
 
 Signed and notarized macOS builds run via GitHub Actions (`.github/workflows/macos-build-notarize.yml`).

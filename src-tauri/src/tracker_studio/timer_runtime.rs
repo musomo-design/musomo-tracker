@@ -227,6 +227,9 @@ impl TimerRuntimeStore {
                 state.pause_accum_sec = 0;
                 state.day_start.clear();
             }
+            "discard" => {
+                *state = TimerRuntimeState::default();
+            }
             _ => {}
         }
 

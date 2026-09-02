@@ -167,6 +167,12 @@ function runtimeIsRunning(data) {
   return !!data.running;
 }
 
+function hasActiveOpenSession(runtime) {
+  if (runtimeHasActiveSession(runtime)) return true;
+  if (state.stopLocked) return false;
+  return state.running || liveSeconds() > 0;
+}
+
 async function pauseSessionFromMini() {
   if (state.running) {
     state.awaitingPauseConfirm = true;
@@ -210,7 +216,7 @@ async function quitApp() {
   }
 }
 
-async function handleCloseRequest() {
+async function handleAppExitRequest() {
   if (allowAppExit) {
     await quitApp();
     return;
@@ -226,9 +232,7 @@ async function handleCloseRequest() {
       /* ignore */
     }
 
-    const running = runtimeIsRunning(runtime) || (state.running && !state.stopLocked);
-
-    if (running) {
+    if (hasActiveOpenSession(runtime)) {
       const choice = await sessionCloseChoiceDialog();
       if (!choice) return;
       if (choice === 'save_close') {
@@ -251,18 +255,29 @@ async function handleCloseRequest() {
 
 async function discardOpenTimer() {
   try {
-    await invoke('tracker_discard_open_timer');
+    await invoke('tracker_notify_mini_action', {
+      action: 'discard',
+      seconds: 0,
+      actionAt: Date.now()
+    });
   } catch (_) {
-    /* ignore */
+    try {
+      await invoke('tracker_discard_open_timer');
+    } catch (_) {
+      /* ignore */
+    }
   }
-}
-
-async function requestCloseMini() {
-  await handleCloseRequest();
+  state.running = false;
+  state.seconds = 0;
+  state.baseSeconds = 0;
+  state.runStartedAt = null;
+  state.stopLocked = false;
+  state.awaitingPauseConfirm = false;
+  state.localHoldUntil = 0;
 }
 
 async function handleAppExitRequested() {
-  await handleCloseRequest();
+  await handleAppExitRequest();
 }
 
 async function bindAppExitGuard() {
@@ -284,7 +299,7 @@ function bindCloseGuard() {
       if (e.key !== 'Escape') return;
       e.preventDefault();
       e.stopImmediatePropagation();
-      void handleCloseRequest();
+      void handleCloseMiniButton();
     },
     true
   );
@@ -297,7 +312,19 @@ function bindCloseGuard() {
     void win.onCloseRequested(event => {
       if (allowMiniClose) return;
       event.preventDefault();
-      void handleCloseRequest();
+      void handleCloseMiniButton();
+    });
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+async function bindMiniChromeEvents() {
+  const listen = window.__TAURI__?.event?.listen;
+  if (typeof listen !== 'function') return;
+  try {
+    await listen('mini-close-requested', () => {
+      void handleCloseMiniButton();
     });
   } catch (_) {
     /* ignore */
@@ -313,8 +340,7 @@ async function handleCloseMiniButton() {
     /* ignore */
   }
 
-  const running = runtimeIsRunning(runtime) || (state.running && !state.stopLocked);
-  if (!running) {
+  if (!hasActiveOpenSession(runtime)) {
     await closeMiniWindow();
     return;
   }
@@ -504,6 +530,7 @@ void (async () => {
   bindControls();
   bindStudioEvents();
   bindCloseGuard();
+  void bindMiniChromeEvents();
   void bindAppExitGuard();
   await syncFromRuntime();
   render();

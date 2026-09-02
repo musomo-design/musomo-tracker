@@ -9,6 +9,7 @@ const MUSOMO_URLS = {
 };
 
 const HELP_SECTIONS = [
+  ['helpSectionWhatsNewTitle', 'helpSectionWhatsNewBody'],
   ['helpSectionOverviewTitle', 'helpSectionOverviewBody'],
   ['helpSectionClientsTitle', 'helpSectionClientsBody'],
   ['helpSectionProjectsTitle', 'helpSectionProjectsBody'],
@@ -374,6 +375,7 @@ const state = {
   /** Date.now() when the current run segment started (wall clock — survives background throttle). */
   timerRunStartedAt: null,
   tickId: null,
+  pauseWatchId: null,
   ringRafId: null,
   timer: {
     projectId: 'p1',
@@ -387,7 +389,9 @@ const state = {
     /** Timestamp when current pause began. */
     pauseStartedAt: null,
     /** True while a Stop/commit is persisting — blocks duplicate saves. */
-    committing: false
+    committing: false,
+    /** Guard against overlapping midnight rollovers. */
+    midnightRolloverInFlight: false
   },
   clients: {
     items: CLIENTS_SEED.map(c => ({ ...c, projects: [...c.projects] })),
@@ -923,6 +927,31 @@ function renderFavorites() {
   });
 }
 
+function getReleaseNotification() {
+  const version = getAppVersion();
+  const storageKey = 'musomo-tracker-seen-release';
+  try {
+    if (localStorage.getItem(storageKey) === version) return null;
+  } catch (_) {
+    return null;
+  }
+  return {
+    kind: 'release',
+    title: tr('releaseNoticeTitle'),
+    name: tr('releaseNoticeName', { version }),
+    when: tr('releaseNoticeSummary'),
+    go: () => {
+      try {
+        localStorage.setItem(storageKey, version);
+      } catch (_) {
+        /* ignore */
+      }
+      renderNotifications();
+      openHelpModal();
+    }
+  };
+}
+
 function getDeadlineNotifications() {
   const notes = [];
   const projectIds = new Set(state.projects.items.map(p => p.id));
@@ -996,7 +1025,9 @@ function getDeadlineNotifications() {
 function renderNotifications() {
   const list = $('notificationsList');
   const badge = $('notifBadge');
-  const notes = getDeadlineNotifications();
+  const release = getReleaseNotification();
+  const deadlines = getDeadlineNotifications();
+  const notes = release ? [release, ...deadlines] : deadlines;
   if (badge) {
     if (notes.length) {
       badge.hidden = false;
@@ -1085,6 +1116,14 @@ function reportBaseName() {
 
 function todayIsoDate() {
   const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function addDaysToIsoDate(dateStr, days) {
+  const raw = String(dateStr || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return todayIsoDate();
+  const d = new Date(`${raw}T12:00:00`);
+  d.setDate(d.getDate() + Number(days) || 0);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
@@ -1250,7 +1289,9 @@ async function commitClaimedTimerWork(chunk) {
     const durationSec = Math.max(1, Math.floor(chunk.secs));
     const breakSec = Math.max(0, Number(chunk.breakSec) || 0);
     const start = normalizeClockString(chunk.start) || clockNow();
-    const end = endClockFromParts(start, durationSec, breakSec) || clockNow();
+    const end = chunk.end
+      ? normalizeClockString(chunk.end) || chunk.end
+      : endClockFromParts(start, durationSec, breakSec) || clockNow();
     const cost = computeSessionCost(durationSec, rate);
     return await upsertSessionLocal(
       {
@@ -1279,6 +1320,151 @@ async function commitTimerSession() {
   const chunk = claimOpenTimerWork();
   if (!chunk) return null;
   return commitClaimedTimerWork(chunk);
+}
+
+function timerHasOpenSession() {
+  return (
+    !!state.timer.dayStart ||
+    liveTimerSeconds() > 0 ||
+    !!state.timer.pauseStartedAt ||
+    !!state.timerRunning
+  );
+}
+
+/** Wall span from dayStart to 24:00:00 on the same calendar day (seconds). */
+function timerDayWallSpanSec(dayStart) {
+  const startSec = parseClockToSeconds(dayStart);
+  if (startSec == null) return 24 * 3600;
+  return Math.max(0, 24 * 3600 - startSec);
+}
+
+/** Split open timer work at one midnight boundary (wall clock, sleep-safe). */
+function computeTimerMidnightSplit(totalWorkedSec, dayStart, breakSec) {
+  const worked = Math.max(0, Math.floor(Number(totalWorkedSec) || 0));
+  const brk = Math.max(0, Number(breakSec) || 0);
+  const start = normalizeClockString(dayStart) || '00:00:00';
+  const span1 = timerDayWallSpanSec(start);
+  const span2 = Math.max(0, worked + brk - span1);
+  const [break1, break2] = splitOvernightBreakSec(brk, span1, Math.max(span2, 1));
+  const dur1 = Math.min(worked, Math.max(0, span1 - break1));
+  const dur2 = Math.max(0, worked - dur1);
+  return { start, span1, break1, break2, dur1, dur2 };
+}
+
+function maybeRolloverTimerDay() {
+  const today = todayIsoDate();
+  if (!state.timer.day || state.timer.day === today || !timerHasOpenSession()) return;
+  void rolloverTimerAtMidnight();
+}
+
+/** Ensure every missed midnight boundary is applied before Stop/commit. */
+async function ensureTimerRolledThroughToday() {
+  await rolloverTimerAtMidnight();
+}
+
+/** Midnight: close day-1 session at 24:00, open day-2 segment (running or paused). */
+async function rolloverTimerAtMidnight() {
+  if (state.timer.committing || state.timer.midnightRolloverInFlight) return;
+  const today = todayIsoDate();
+  if (!state.timer.day || state.timer.day === today || !timerHasOpenSession()) return;
+
+  state.timer.midnightRolloverInFlight = true;
+  try {
+    let guard = 0;
+    while (
+      state.timer.day &&
+      state.timer.day !== today &&
+      timerHasOpenSession() &&
+      guard < 366
+    ) {
+      guard += 1;
+      await rolloverTimerOneDay();
+    }
+  } finally {
+    state.timer.midnightRolloverInFlight = false;
+  }
+}
+
+/** Apply a single calendar-day split at the next midnight boundary. */
+async function rolloverTimerOneDay() {
+  const oldDay = state.timer.day;
+  const today = todayIsoDate();
+  if (!oldDay || oldDay === today || !timerHasOpenSession()) return;
+
+  const wasRunning = !!state.timerRunning;
+  const resumePaused = !wasRunning && timerHasOpenSession();
+
+  stopTick();
+  stopPausedWatch();
+  state.timerRunning = false;
+
+  if (state.timer.pauseStartedAt) finalizeOpenPause();
+  freezeLiveTimer();
+
+  const totalWorked = Math.max(0, Math.floor(state.timerSeconds || 0));
+  const breakSec = Math.max(0, Number(state.timer.pauseAccumSec) || 0);
+  const { start, break1, dur1, dur2 } = computeTimerMidnightSplit(
+    totalWorked,
+    state.timer.dayStart,
+    breakSec
+  );
+
+  if (dur1 >= 1) {
+    state.timer.committing = true;
+    try {
+      await commitClaimedTimerWork({
+        secs: dur1,
+        date: oldDay,
+        start,
+        breakSec: break1,
+        end: '24:00:00'
+      });
+    } finally {
+      state.timer.committing = false;
+    }
+  }
+
+  const nextDay = addDaysToIsoDate(oldDay, 1);
+  state.timer.day = nextDay;
+  state.timer.dayStart = dur2 >= 1 || wasRunning || resumePaused ? '00:00:00' : '';
+  state.timerSeconds = dur2;
+  state.timerRunStartedAt = null;
+  state.timer.pauseAccumSec = 0;
+  state.timer.pauseStartedAt = null;
+
+  if (wasRunning || resumePaused) {
+    if (wasRunning) {
+      state.timerRunning = true;
+      state.timerRunStartedAt = Date.now();
+      syncTimerUi();
+      startTick();
+    } else {
+      state.timerRunning = false;
+      state.timer.pauseStartedAt = Date.now();
+      syncTimerUi();
+      startPausedWatch();
+    }
+    pushTimerStateToMini(true);
+    refreshAfterSessionChange();
+    return;
+  }
+
+  syncTimerUi();
+  pushTimerStateToMini(true);
+}
+
+function splitOvernightBreakSec(breakSec, span1, span2) {
+  const total = Math.max(0, Number(span1) || 0) + Math.max(0, Number(span2) || 0);
+  const brk = Math.max(0, Number(breakSec) || 0);
+  if (total < 1 || brk < 1) return [0, 0];
+  const break1 = Math.min(brk, Math.round((brk * span1) / total));
+  return [break1, Math.max(0, brk - break1)];
+}
+
+function manualEntrySpansOvernight(start, end) {
+  const a = parseClockToSeconds(start);
+  const b = parseClockToSeconds(end);
+  return a != null && b != null && b < a;
 }
 
 function sessionPeriodFromDate(dateStr) {
@@ -3050,7 +3236,7 @@ function openSessionEditor(sessionOrDefaults = null) {
   if (subtitle) {
     subtitle.textContent = isEdit
       ? 'Billable time = (End − Start) − Break. Change project to move this session.'
-      : 'Set start and end (HH:MM:SS, 24h). Break optional. Billable = (End − Start) − Break.';
+      : 'Set start and end (HH/MM/SS, 24h). Break optional. Billable = (End − Start) − Break.';
   }
   if (select) {
     select.innerHTML = state.projects.items
@@ -3532,6 +3718,7 @@ function freezeLiveTimer() {
 }
 
 async function saveCurrentSession() {
+  await ensureTimerRolledThroughToday();
   return commitTimerSession();
 }
 
@@ -3564,19 +3751,8 @@ function stopTimer(reset = true) {
 
 function timerStart() {
   const today = todayIsoDate();
-  // New calendar day → close yesterday's open timer, then start a fresh session today.
-  if (state.timer.day && state.timer.day !== today && (liveTimerSeconds() > 0 || state.timer.dayStart)) {
-    void commitTimerSession().then(() => {
-      state.timer.day = today;
-      state.timer.dayStart = clockNow();
-      state.timer.pauseAccumSec = 0;
-      state.timer.pauseStartedAt = null;
-      state.timerRunning = true;
-      state.timerRunStartedAt = Date.now();
-      syncTimerUi();
-      startTick();
-      refreshAfterSessionChange();
-    });
+  if (state.timer.day && state.timer.day !== today && timerHasOpenSession()) {
+    void rolloverTimerAtMidnight();
     return;
   }
   finalizeOpenPause();
@@ -3603,6 +3779,7 @@ function timerPause() {
   state.timer.pauseStartedAt = Date.now();
   syncTimerUi();
   stopTick();
+  if (timerHasOpenSession()) startPausedWatch();
 }
 
 function updateTimerSessionsPanel() {
@@ -3918,28 +4095,45 @@ function fixedClockDigits(value) {
   return String(value || '').replace(/\D/g, '').slice(0, 6);
 }
 
-function fixedClockDisplayFromDigits(digits) {
+function fixedClockSlotsFromDigits(digits) {
+  const slots = '000000'.split('');
   const d = fixedClockDigits(digits);
-  const ch = i => d[i] || '';
-  return `${ch(0)}${ch(1)}:${ch(2)}${ch(3)}:${ch(4)}${ch(5)}`;
+  for (let i = 0; i < d.length && i < 6; i++) slots[i] = d[i];
+  return slots;
+}
+
+function fixedClockDigitsFromSlots(slots) {
+  return slots.join('').slice(0, 6);
+}
+
+function fixedClockMaskFromSlots(slots) {
+  return `${slots[0]}${slots[1]}/${slots[2]}${slots[3]}/${slots[4]}${slots[5]}`;
+}
+
+function fixedClockMaskDisplay(digits) {
+  return fixedClockMaskFromSlots(fixedClockSlotsFromDigits(digits));
 }
 
 function fixedClockValueFromDigits(digits) {
   const d = fixedClockDigits(digits);
-  if (d.length < 6) return '';
-  return `${d.slice(0, 2)}:${d.slice(2, 4)}:${d.slice(4, 6)}`;
+  if (!d) return '';
+  const padded = d.padEnd(6, '0');
+  return `${padded.slice(0, 2)}:${padded.slice(2, 4)}:${padded.slice(4, 6)}`;
 }
 
 function fixedClockDigitIndexFromCursor(pos) {
-  if (pos <= 2) return Math.min(Math.max(pos, 0), 2);
-  if (pos <= 5) return Math.min(Math.max(pos - 1, 0), 4);
-  return Math.min(Math.max(pos - 2, 0), 6);
+  const p = Math.max(0, Math.min(7, Number(pos) || 0));
+  if (p <= 1) return p;
+  if (p === 2) return 2;
+  if (p <= 4) return p - 1;
+  if (p === 5) return 4;
+  return p - 2;
 }
 
 function fixedClockCursorFromDigitIndex(idx) {
-  const i = Math.max(0, Math.min(6, idx));
-  if (i <= 2) return i;
-  if (i <= 4) return i + 1;
+  const i = Math.max(0, Math.min(5, idx));
+  if (i <= 1) return i;
+  if (i <= 3) return i + 1;
   return i + 2;
 }
 
@@ -3947,19 +4141,25 @@ function getFixedClockDigits(el) {
   return el?.dataset.clockDigits || '';
 }
 
-function setFixedClockDigits(el, digits) {
+function isFixedClockAllZeros(digits) {
+  return !fixedClockDigits(digits) || /^0+$/.test(fixedClockDigits(digits));
+}
+
+function applyFixedClockDisplay(el, digits, { empty = false } = {}) {
   if (!el) return;
-  const d = fixedClockDigits(digits);
-  el.dataset.clockDigits = d;
-  el.value = d.length ? fixedClockDisplayFromDigits(d) : '';
+  el.dataset.clockDigits = fixedClockDigits(digits);
+  el.dataset.clockEmpty = empty ? '1' : '0';
+  el.value = fixedClockMaskDisplay(el.dataset.clockDigits);
 }
 
 function clockFieldValue(id) {
   const el = $(id);
   if (!el) return '';
-  const fromDigits = fixedClockValueFromDigits(getFixedClockDigits(el));
-  if (fromDigits) return normalizeClockString(fromDigits) || fromDigits;
-  return normalizeClockString(el.value) || '';
+  if (el.dataset.clockEmpty === '1') return '';
+  const d = getFixedClockDigits(el);
+  if (!d) return '';
+  const normalized = normalizeClockString(fixedClockValueFromDigits(d));
+  return normalized || '';
 }
 
 function setManualClockField(id, value) {
@@ -3968,55 +4168,91 @@ function setManualClockField(id, value) {
   const normalized = value ? normalizeClockString(value) || '' : '';
   if (!normalized) {
     el.dataset.clockDigits = '';
+    el.dataset.clockEmpty = '1';
     el.value = '';
     return;
   }
-  el.dataset.clockDigits = normalized.replace(/\D/g, '').slice(0, 6);
-  el.value = normalized;
+  const digits = normalized.replace(/\D/g, '').slice(0, 6).padEnd(6, '0');
+  applyFixedClockDisplay(el, digits, { empty: false });
 }
 
 function bindFixedClockInput(el, syncFn) {
   if (!el || el.dataset.fixedClockBound) return;
   el.dataset.fixedClockBound = '1';
 
-  el.addEventListener('focus', () => {
+  const renderMask = (selectIdx = 0) => {
     const d = getFixedClockDigits(el);
-    el.value = d.length ? fixedClockDisplayFromDigits(d) : '  :  :  ';
-    const pos = fixedClockCursorFromDigitIndex(d.length);
-    requestAnimationFrame(() => el.setSelectionRange(pos, pos));
+    el.value = fixedClockMaskDisplay(d);
+    const idx = Math.max(0, Math.min(5, selectIdx));
+    const pos = fixedClockCursorFromDigitIndex(idx);
+    requestAnimationFrame(() => el.setSelectionRange(pos, pos + 1));
+  };
+
+  el.addEventListener('focus', () => {
+    el.dataset.clockEmpty = '0';
+    renderMask(0);
   });
 
   el.addEventListener('keydown', e => {
-    if (e.key === 'Tab' || e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End') return;
+    if (e.key === 'Tab') return;
     if (e.ctrlKey || e.metaKey) return;
+
+    const idx = fixedClockDigitIndexFromCursor(el.selectionStart ?? 0);
+
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      renderMask(Math.max(0, idx - 1));
+      return;
+    }
+    if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      renderMask(Math.min(5, idx + 1));
+      return;
+    }
+    if (e.key === 'Home') {
+      e.preventDefault();
+      renderMask(0);
+      return;
+    }
+    if (e.key === 'End') {
+      e.preventDefault();
+      renderMask(5);
+      return;
+    }
 
     if (e.key.length === 1 && /\d/.test(e.key)) {
       e.preventDefault();
-      let d = getFixedClockDigits(el);
-      if (d.length >= 6) return;
-      d += e.key;
-      setFixedClockDigits(el, d);
-      el.value = fixedClockDisplayFromDigits(d);
-      const pos = fixedClockCursorFromDigitIndex(d.length);
-      el.setSelectionRange(pos, pos);
+      const slots = fixedClockSlotsFromDigits(getFixedClockDigits(el));
+      slots[idx] = e.key;
+      applyFixedClockDisplay(el, fixedClockDigitsFromSlots(slots), { empty: false });
+      renderMask(Math.min(idx + 1, 5));
       syncFn();
       return;
     }
 
     if (e.key === 'Backspace') {
       e.preventDefault();
-      const d = getFixedClockDigits(el).slice(0, -1);
-      setFixedClockDigits(el, d);
-      if (d.length) el.value = fixedClockDisplayFromDigits(d);
-      const pos = fixedClockCursorFromDigitIndex(d.length);
-      el.setSelectionRange(pos, pos);
+      const d = fixedClockDigits(getFixedClockDigits(el));
+      if (!d.length) {
+        renderMask(0);
+        syncFn();
+        return;
+      }
+      const slots = fixedClockSlotsFromDigits(d);
+      const clearIdx = Math.min(idx, Math.max(0, d.length - 1));
+      slots[clearIdx] = '0';
+      let nextDigits = fixedClockDigitsFromSlots(slots).replace(/0+$/, '');
+      if (nextDigits && /^0+$/.test(nextDigits)) nextDigits = '';
+      applyFixedClockDisplay(el, nextDigits, { empty: !nextDigits });
+      renderMask(Math.max(0, clearIdx - 1));
       syncFn();
       return;
     }
 
     if (e.key === 'Delete') {
       e.preventDefault();
-      setFixedClockDigits(el, '');
+      applyFixedClockDisplay(el, '', { empty: true });
+      renderMask(0);
       syncFn();
       return;
     }
@@ -4027,18 +4263,23 @@ function bindFixedClockInput(el, syncFn) {
   el.addEventListener('paste', e => {
     e.preventDefault();
     const text = (e.clipboardData?.getData('text') || '').replace(/\D/g, '').slice(0, 6);
-    setFixedClockDigits(el, text);
-    if (text.length) el.value = fixedClockDisplayFromDigits(text);
+    applyFixedClockDisplay(el, text, { empty: !text });
+    renderMask(Math.min(text.length, 5));
     syncFn();
   });
 
   el.addEventListener('click', () => {
     requestAnimationFrame(() => {
-      const pos = el.selectionStart ?? 0;
-      const idx = fixedClockDigitIndexFromCursor(pos);
-      const d = getFixedClockDigits(el);
-      const newPos = fixedClockCursorFromDigitIndex(Math.min(idx, d.length));
-      el.setSelectionRange(newPos, newPos);
+      const idx = fixedClockDigitIndexFromCursor(el.selectionStart ?? 0);
+      renderMask(idx);
+    });
+  });
+
+  el.addEventListener('select', () => {
+    requestAnimationFrame(() => {
+      if (el.selectionStart !== el.selectionEnd) return;
+      const idx = fixedClockDigitIndexFromCursor(el.selectionStart ?? 0);
+      renderMask(idx);
     });
   });
 
@@ -4051,15 +4292,23 @@ function bindFixedClockInput(el, syncFn) {
 function normalizeManualEntryClockField(id) {
   const el = $(id);
   if (!el) return;
-  const d = getFixedClockDigits(el);
-  if (d.length === 6) {
-    const normalized = normalizeClockString(fixedClockValueFromDigits(d));
-    if (normalized) {
-      setManualClockField(id, normalized);
-      return;
-    }
+  if (el.dataset.clockEmpty === '1') {
+    if (id === 'mBreak') setManualClockField(id, '00:00:00');
+    else setManualClockField(id, '');
+    return;
   }
-  if (id === 'mBreak') setManualClockField('mBreak', '00:00:00');
+  const d = getFixedClockDigits(el);
+  if (!d) {
+    if (id === 'mBreak') setManualClockField(id, '00:00:00');
+    else setManualClockField(id, '');
+    return;
+  }
+  const normalized = normalizeClockString(fixedClockValueFromDigits(d));
+  if (normalized) {
+    setManualClockField(id, normalized);
+    return;
+  }
+  if (id === 'mBreak') setManualClockField(id, '00:00:00');
   else setManualClockField(id, '');
 }
 
@@ -4124,11 +4373,70 @@ async function saveManualEntry() {
     rateRaw !== '' && rateRaw != null && Number.isFinite(Number(rateRaw))
       ? Math.max(0, Number(rateRaw))
       : undefined;
+  const note = String($('mNote')?.value || '').trim();
+  const startDate = $('mDate')?.value || todayIsoDate();
 
   const editingId = state.sessionEditor.editingId;
   const previous =
     editingId ? state.timer.sessions.find(s => s.id === editingId) : null;
   const previousProjectId = previous?.projectId || null;
+
+  if (!editingId && manualEntrySpansOvernight(start, end)) {
+    const startSec = parseClockToSeconds(start);
+    const endSec = parseClockToSeconds(end);
+    const span1 = 24 * 3600 - startSec;
+    const span2 = endSec;
+    const [break1, break2] = splitOvernightBreakSec(breakMin, span1, span2);
+    const dur1 = span1 - break1;
+    const dur2 = span2 - break2;
+    if (dur1 < 1 && dur2 < 1) {
+      alert('No billable time left after break. Reduce break or widen start/end.');
+      return;
+    }
+    const stamp = Date.now();
+    if (dur1 >= 1) {
+      await upsertSessionLocal(
+        {
+          id: `s${stamp}-1`,
+          projectId: project.id,
+          project: project.name,
+          client: project.client,
+          date: startDate,
+          start,
+          end: '24:00:00',
+          breakMin: break1,
+          description: note,
+          durationMin: dur1,
+          ...(rate != null ? { rate } : {})
+        },
+        { isNew: true }
+      );
+    }
+    if (dur2 >= 1) {
+      await upsertSessionLocal(
+        {
+          id: `s${stamp}-2`,
+          projectId: project.id,
+          project: project.name,
+          client: project.client,
+          date: addDaysToIsoDate(startDate, 1),
+          start: '00:00:00',
+          end,
+          breakMin: break2,
+          description: note,
+          durationMin: dur2,
+          ...(rate != null ? { rate } : {})
+        },
+        { isNew: true }
+      );
+    }
+    closeManualEntryModal();
+    refreshAfterSessionChange();
+    if (state.page !== 'project-detail' && state.page !== 'timer' && state.page !== 'sessions') {
+      setPage('timer');
+    }
+    return;
+  }
 
   // If editing and project changed → save edits, then reassign the same session row.
   if (editingId && previousProjectId && previousProjectId !== project.id) {
@@ -6061,25 +6369,8 @@ function startTick() {
   stopTick();
   startRingAnim();
   state.tickId = window.setInterval(() => {
+    maybeRolloverTimerDay();
     if (!state.timerRunning) return;
-    const today = todayIsoDate();
-    // Midnight rollover: close yesterday's session, start a new one today.
-    if (state.timer.day && state.timer.day !== today) {
-      state.timerRunning = false;
-      stopTick();
-      void commitTimerSession().then(() => {
-        state.timer.day = today;
-        state.timer.dayStart = clockNow();
-        state.timer.pauseAccumSec = 0;
-        state.timer.pauseStartedAt = null;
-        state.timerRunning = true;
-        state.timerRunStartedAt = Date.now();
-        syncTimerUi();
-        startTick();
-        refreshAfterSessionChange();
-      });
-      return;
-    }
     syncTimerUi();
   }, 1000);
   // Catch up immediately when returning from background (throttled intervals).
@@ -6088,10 +6379,45 @@ function startTick() {
 
 function stopTick() {
   stopRingAnim();
+  stopPausedWatch();
   if (state.tickId) {
     clearInterval(state.tickId);
     state.tickId = null;
   }
+}
+
+function stopPausedWatch() {
+  if (state.pauseWatchId) {
+    clearInterval(state.pauseWatchId);
+    state.pauseWatchId = null;
+  }
+}
+
+function startPausedWatch() {
+  if (state.pauseWatchId) return;
+  state.pauseWatchId = window.setInterval(() => {
+    maybeRolloverTimerDay();
+  }, 1000);
+}
+
+function resetOpenTimerLocal() {
+  state.timerRunning = false;
+  state.timerRunStartedAt = null;
+  state.timerSeconds = 0;
+  state.timer.pauseStartedAt = null;
+  state.timer.pauseAccumSec = 0;
+  state.timer.dayStart = '';
+  stopTick();
+  syncTimerUi();
+}
+
+async function discardOpenTimerSession() {
+  try {
+    await invoke('tracker_discard_open_timer');
+  } catch (_) {
+    /* ignore */
+  }
+  resetOpenTimerLocal();
 }
 
 function toggleTimer() {
@@ -6167,6 +6493,8 @@ function bindMiniTimerSync() {
           /* ignore */
         }
       });
+    } else if (data.action === 'discard') {
+      resetOpenTimerLocal();
     }
   };
 
@@ -6196,11 +6524,13 @@ function bindMiniTimerSync() {
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
       drainPendingMiniAction();
+      maybeRolloverTimerDay();
       syncTimerUi();
     }
   });
   window.addEventListener('focus', () => {
     drainPendingMiniAction();
+    maybeRolloverTimerDay();
     syncTimerUi();
   });
 
@@ -6236,8 +6566,12 @@ async function closeMini() {
       await restoreTimerRuntime();
     }
 
-    const running = runtimeIsRunning(runtime) || !!state.timerRunning;
-    if (!running) {
+    const active =
+      runtimeHasActiveOpenSession(runtime) ||
+      !!state.timerRunning ||
+      liveTimerSeconds() > 0 ||
+      !!state.timer.dayStart;
+    if (!active) {
       await invoke('close_tracker_mini');
       return;
     }
@@ -6254,8 +6588,7 @@ async function closeMini() {
         timerPause();
         pushTimerStateToMini(true);
       } else if (choice === 'discard') {
-        await invoke('tracker_discard_open_timer');
-        pushTimerStateToMini(true);
+        await discardOpenTimerSession();
       }
       await invoke('close_tracker_mini');
     } finally {
@@ -6591,6 +6924,13 @@ function runtimeIsRunning(data) {
   return !!data.running;
 }
 
+function runtimeHasActiveOpenSession(data) {
+  if (!data || typeof data !== 'object') return false;
+  if (data.pendingCommit && Number(data.pendingCommit.secs) > 0) return true;
+  const base = Math.max(0, Number(data.baseSeconds ?? data.seconds) || 0);
+  return !!data.running || base > 0 || !!String(data.dayStart || '').trim();
+}
+
 async function ensurePausePersisted() {
   if (state.timerRunning) {
     timerPause();
@@ -6616,9 +6956,13 @@ async function handleCloseRequest() {
       await restoreTimerRuntime();
     }
 
-    const running = runtimeIsRunning(runtime) || !!state.timerRunning;
+    const active =
+      runtimeHasActiveOpenSession(runtime) ||
+      !!state.timerRunning ||
+      liveTimerSeconds() > 0 ||
+      !!state.timer.dayStart;
 
-    if (running) {
+    if (active) {
       const choice = await sessionCloseChoiceDialog();
       if (!choice) return;
       if (choice === 'save_close') {
@@ -6628,7 +6972,7 @@ async function handleCloseRequest() {
         timerPause();
         pushTimerStateToMini(true);
       } else if (choice === 'discard') {
-        await invoke('tracker_discard_open_timer');
+        await discardOpenTimerSession();
       }
       allowAppExit = true;
       await invoke('allow_app_exit');
@@ -6705,6 +7049,7 @@ async function init() {
   await bootstrapTracker();
   applyUiTheme(state.settings.uiTheme);
   await restoreTimerRuntime();
+  maybeRolloverTimerDay();
   refreshChrome();
   setPage('overview');
   bindQuickActions();

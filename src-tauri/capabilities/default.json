@@ -13,6 +13,9 @@
     "core:window:allow-start-dragging",
     "core:window:allow-show",
     "core:window:allow-unminimize",
+    "core:window:allow-minimize",
+    "core:window:allow-set-size",
+    "core:window:allow-is-minimized",
     "dialog:default",
     "allow-tracker"
   ]
