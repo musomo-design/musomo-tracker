@@ -195,6 +195,13 @@ English, Italiano, Español, Français, Deutsch — system default or override i
 - **Support Musomo:** https://ko-fi.com/musomo
 - **Repository:** https://github.com/musomo-design/musomo-tracker
 
+## Support Musomo Tracker
+
+Musomo Tracker is free and local-first.  
+If you find it useful, you can support its development:
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/K3K01ZCGJ4)
+
 ## Privacy
 
 Full policy: [PRIVACY.md](PRIVACY.md)
