@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>Version 1.4.0</strong>
+  <strong>Version 1.4.2</strong>
 </p>
 
 <p align="center">
@@ -26,6 +26,13 @@
 ---
 
 Musomo Tracker helps you manage clients, projects, and billable time — without cloud accounts or subscriptions. All data stays on your device in a local SQLite database.
+
+## What's new in 1.4.2
+
+- **End-of-day dialog** — when a paused timer crosses midnight, yesterday's session is saved at 24:00 and you can start a new session for today or dismiss
+- **Automatic backups visible** — auto safety copies now appear in Settings → Restore with clear labels
+- **Safer quit** — closing the app with an open timer (including paused) shows the save dialog instead of losing work
+- **Dialog reliability** — native macOS dialogs fixed for midnight and close flows
 
 ## What's new in 1.4.0
 
@@ -150,7 +157,7 @@ Includes `tracker.db`, automatic backups in `archives/`, and brand assets in `as
 From **Settings → Data**:
 
 - **Manual backup** — name your snapshot; files live in `archives/` on this Mac
-- **Automatic backup** — created before clean, demo restore, or archive restore; stored in `archives/auto/` (last 10 kept)
+- **Automatic backup** — created before clean, demo restore, or archive restore; stored in `archives/auto/` (last 10 kept); visible in the restore list with an **Automatic backup** label
 - **Restore from archive** — full studio snapshot including branding; a safety backup is created first
 - **Clean database** — wipes clients/projects/tasks/sessions only; keeps your current profile and logos
 - **Restore demo** — loads the Northstar demo profile (data + settings)
@@ -176,7 +183,7 @@ Release artifacts can be staged with:
 
 ```bash
 bash scripts/stage-dist.sh
-# Output: dist/v1.4.0/
+# Output: dist/v1.4.2/
 ```
 
 Signed and notarized macOS builds run via GitHub Actions (`.github/workflows/macos-build-notarize.yml`).

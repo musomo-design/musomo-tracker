@@ -29,9 +29,11 @@ commands.allow = [
     "tracker_save_brand_image",
     "tracker_import_brand_file",
     "save_downloaded_file",
+    "read_file_bytes",
     "open_file",
     "compose_mail_with_attachment",
     "allow_app_exit",
     "tracker_confirm_dialog",
+    "tracker_two_choice_dialog",
     "tracker_session_close_dialog"
 ]

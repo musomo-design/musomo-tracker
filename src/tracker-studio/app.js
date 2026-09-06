@@ -591,7 +591,9 @@ function formatArchiveDateTime(unixSec) {
 }
 
 function formatArchiveOptionLabel(entry) {
-  const label = String(entry?.label || entry?.name || '').trim();
+  const label = entry?.isAuto
+    ? tr('archiveAutoLabel')
+    : String(entry?.label || entry?.name || '').trim();
   const when = formatArchiveDateTime(entry?.createdAt ?? entry?.created_at);
   return when ? `${label} · ${when}` : label;
 }
@@ -1293,7 +1295,7 @@ async function commitClaimedTimerWork(chunk) {
       ? normalizeClockString(chunk.end) || chunk.end
       : endClockFromParts(start, durationSec, breakSec) || clockNow();
     const cost = computeSessionCost(durationSec, rate);
-    return await upsertSessionLocal(
+    const saved = await upsertSessionLocal(
       {
         id: `s${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         projectId: project?.id || '',
@@ -1310,6 +1312,7 @@ async function commitClaimedTimerWork(chunk) {
       },
       { isNew: true }
     );
+    return saved;
   } finally {
     state.timer.committing = false;
   }
@@ -1362,7 +1365,7 @@ async function ensureTimerRolledThroughToday() {
   await rolloverTimerAtMidnight();
 }
 
-/** Midnight: close day-1 session at 24:00, open day-2 segment (running or paused). */
+/** Midnight: running → split and continue; paused → stop day 1 and prompt for today. */
 async function rolloverTimerAtMidnight() {
   if (state.timer.committing || state.timer.midnightRolloverInFlight) return;
   const today = todayIsoDate();
@@ -1385,6 +1388,23 @@ async function rolloverTimerAtMidnight() {
   }
 }
 
+async function midnightEndOfDayChoiceDialog(yesterdayIso, todayIso) {
+  const message = tr('midnightEndOfDayMessage', {
+    yesterday: formatDisplayDate(yesterdayIso),
+    today: formatDisplayDate(todayIso)
+  });
+  try {
+    return !!(await invoke('tracker_two_choice_dialog', {
+      title: tr('midnightEndOfDayTitle'),
+      message,
+      primary: tr('midnightEndOfDayNewSession'),
+      secondary: tr('midnightEndOfDayNotNow')
+    }));
+  } catch (_) {
+    return confirm(`${tr('midnightEndOfDayTitle')}\n\n${message}`);
+  }
+}
+
 /** Apply a single calendar-day split at the next midnight boundary. */
 async function rolloverTimerOneDay() {
   const oldDay = state.timer.day;
@@ -1392,7 +1412,6 @@ async function rolloverTimerOneDay() {
   if (!oldDay || oldDay === today || !timerHasOpenSession()) return;
 
   const wasRunning = !!state.timerRunning;
-  const resumePaused = !wasRunning && timerHasOpenSession();
 
   stopTick();
   stopPausedWatch();
@@ -1403,7 +1422,45 @@ async function rolloverTimerOneDay() {
 
   const totalWorked = Math.max(0, Math.floor(state.timerSeconds || 0));
   const breakSec = Math.max(0, Number(state.timer.pauseAccumSec) || 0);
-  const { start, break1, dur1, dur2 } = computeTimerMidnightSplit(
+  const start = normalizeClockString(state.timer.dayStart) || '00:00:00';
+
+  if (!wasRunning) {
+    if (totalWorked >= 1) {
+      state.timer.committing = true;
+      try {
+        await commitClaimedTimerWork({
+          secs: totalWorked,
+          date: oldDay,
+          start,
+          breakSec,
+          end: endClockFromParts(start, totalWorked, breakSec) || '24:00:00'
+        });
+      } finally {
+        state.timer.committing = false;
+      }
+    }
+
+    const savedProjectId = state.timer.projectId;
+    resetOpenTimerLocal();
+    state.timer.day = today;
+    state.timer.projectId = savedProjectId;
+    refreshAfterSessionChange();
+    pushTimerStateToMini(true);
+
+    const newSession = await midnightEndOfDayChoiceDialog(oldDay, today);
+    if (newSession) {
+      state.timer.day = today;
+      state.timer.projectId = savedProjectId;
+    } else {
+      resetOpenTimerLocal();
+      state.timer.day = today;
+    }
+    syncTimerUi();
+    pushTimerStateToMini(true);
+    return;
+  }
+
+  const { break1, dur1, dur2, break2 } = computeTimerMidnightSplit(
     totalWorked,
     state.timer.dayStart,
     breakSec
@@ -1426,31 +1483,17 @@ async function rolloverTimerOneDay() {
 
   const nextDay = addDaysToIsoDate(oldDay, 1);
   state.timer.day = nextDay;
-  state.timer.dayStart = dur2 >= 1 || wasRunning || resumePaused ? '00:00:00' : '';
+  state.timer.dayStart = '00:00:00';
   state.timerSeconds = dur2;
   state.timerRunStartedAt = null;
-  state.timer.pauseAccumSec = 0;
+  state.timer.pauseAccumSec = Math.max(0, Number(break2) || 0);
   state.timer.pauseStartedAt = null;
-
-  if (wasRunning || resumePaused) {
-    if (wasRunning) {
-      state.timerRunning = true;
-      state.timerRunStartedAt = Date.now();
-      syncTimerUi();
-      startTick();
-    } else {
-      state.timerRunning = false;
-      state.timer.pauseStartedAt = Date.now();
-      syncTimerUi();
-      startPausedWatch();
-    }
-    pushTimerStateToMini(true);
-    refreshAfterSessionChange();
-    return;
-  }
-
+  state.timerRunning = true;
+  state.timerRunStartedAt = Date.now();
   syncTimerUi();
+  startTick();
   pushTimerStateToMini(true);
+  refreshAfterSessionChange();
 }
 
 function splitOvernightBreakSec(breakSec, span1, span2) {
@@ -1595,11 +1638,14 @@ function sessionToApi(session) {
   };
 }
 
-async function persistSession(session) {
+async function persistSession(session, { throwOnError = false } = {}) {
   try {
     await invoke('tracker_upsert_session', { session: sessionToApi(session) });
+    return true;
   } catch (err) {
     console.warn('persistSession', err);
+    if (throwOnError) throw err;
+    return false;
   }
 }
 
@@ -1611,7 +1657,7 @@ async function deleteSessionRecord(id) {
   }
 }
 
-async function upsertSessionLocal(session, { isNew = false, previousProjectId = null } = {}) {
+async function upsertSessionLocal(session, { isNew = false, previousProjectId = null, throwOnError = false } = {}) {
   const normalized = normalizeSession(session);
   if (isNew) {
     state.timer.sessions.unshift(normalized);
@@ -1620,7 +1666,7 @@ async function upsertSessionLocal(session, { isNew = false, previousProjectId = 
     if (idx >= 0) state.timer.sessions[idx] = normalized;
     else state.timer.sessions.unshift(normalized);
   }
-  await persistSession(normalized);
+  await persistSession(normalized, { throwOnError });
   if (normalized.projectId) syncProjectStats(normalized.projectId);
   if (previousProjectId && previousProjectId !== normalized.projectId) {
     syncProjectStats(previousProjectId);
@@ -1856,8 +1902,10 @@ async function restoreTimerRuntime() {
     if (!hasOpen) return;
 
     applyRuntimeTimerState(runtime);
+    await rolloverTimerAtMidnight();
     syncTimerUi();
     if (state.timerRunning) startTick();
+    else if (timerHasOpenSession()) startPausedWatch();
   } catch (err) {
     console.warn('restoreTimerRuntime', err);
   }
@@ -2126,12 +2174,12 @@ function renderNav() {
   const nav = $('mainNav');
   if (!nav) return;
   const activeId = state.page === 'project-detail' ? 'projects' : state.page;
-  nav.innerHTML = NAV.map(
-    item => `<button type="button" class="nav-item${item.id === activeId ? ' is-active' : ''}" data-page="${item.id}">
+  nav.innerHTML = NAV.map(item => {
+    return `<button type="button" class="nav-item${item.id === activeId ? ' is-active' : ''}" data-page="${item.id}">
       <span class="nav-item__icon" aria-hidden="true" style="--nav-icon: url('./asset/${item.icon}')"></span>
       <span>${tr(item.labelKey)}</span>
-    </button>`
-  ).join('');
+    </button>`;
+  }).join('');
   nav.querySelectorAll('[data-page]').forEach(btn => {
     btn.addEventListener('click', () => {
       if (btn.dataset.page === 'projects') state.projects.detailId = null;
@@ -4828,7 +4876,8 @@ function getReportEntries() {
       total: Number(s.cost) || hoursDecimal * rate,
       currency: currencyForClient(client),
       client: client.company,
-      project: proj.name
+      project: proj.name,
+      sessionId: s.id
     });
   });
 
@@ -5555,6 +5604,721 @@ function zipStore(files) {
   return out;
 }
 
+function readZipU16(bytes, off) {
+  return bytes[off] | (bytes[off + 1] << 8);
+}
+
+function readZipU32(bytes, off) {
+  return (bytes[off] | (bytes[off + 1] << 8) | (bytes[off + 2] << 16) | (bytes[off + 3] << 24)) >>> 0;
+}
+
+async function inflateRawDeflate(data) {
+  if (typeof DecompressionStream === 'undefined') {
+    throw new Error('DecompressionStream is not available.');
+  }
+  const ds = new DecompressionStream('deflate-raw');
+  const writer = ds.writable.getWriter();
+  await writer.write(data);
+  await writer.close();
+  const reader = ds.readable.getReader();
+  const chunks = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const out = new Uint8Array(total);
+  let pos = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, pos);
+    pos += chunk.length;
+  }
+  return out;
+}
+
+/** Read .xlsx / .zip entries (store + deflate). */
+async function unzipBytes(bytes) {
+  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let eocd = -1;
+  for (let i = Math.max(0, u8.length - 22); i >= 0; i -= 1) {
+    if (readZipU32(u8, i) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) throw new Error('Invalid Excel file (zip end not found).');
+
+  const count = readZipU16(u8, eocd + 10);
+  const cdOffset = readZipU32(u8, eocd + 16);
+  const files = {};
+  let pos = cdOffset;
+  for (let i = 0; i < count; i += 1) {
+    if (readZipU32(u8, pos) !== 0x02014b50) break;
+    const compMethod = readZipU16(u8, pos + 10);
+    const compSize = readZipU32(u8, pos + 20);
+    const nameLen = readZipU16(u8, pos + 28);
+    const extraLen = readZipU16(u8, pos + 30);
+    const commentLen = readZipU16(u8, pos + 32);
+    const localOffset = readZipU32(u8, pos + 42);
+    const name = new TextDecoder().decode(u8.subarray(pos + 46, pos + 46 + nameLen));
+    pos += 46 + nameLen + extraLen + commentLen;
+
+    const localPos = localOffset;
+    const localNameLen = readZipU16(u8, localPos + 26);
+    const localExtraLen = readZipU16(u8, localPos + 28);
+    const dataStart = localPos + 30 + localNameLen + localExtraLen;
+    const compressed = u8.subarray(dataStart, dataStart + compSize);
+    if (compMethod === 0) {
+      files[name] = compressed.slice();
+    } else if (compMethod === 8) {
+      files[name] = await inflateRawDeflate(compressed);
+    } else {
+      throw new Error(`Unsupported zip compression (${compMethod}).`);
+    }
+  }
+  return files;
+}
+
+function colLettersFromCellRef(ref) {
+  return String(ref || '').replace(/[0-9].*$/, '');
+}
+
+function colLetterToIndex(letters) {
+  let n = 0;
+  for (const ch of String(letters || '').toUpperCase()) {
+    n = n * 26 + (ch.charCodeAt(0) - 64);
+  }
+  return Math.max(0, n - 1);
+}
+
+function parseSharedStringsXml(xml) {
+  if (!xml) return [];
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  return [...doc.getElementsByTagName('si')].map(si => {
+    const parts = [...si.getElementsByTagName('t')];
+    if (parts.length) return parts.map(node => node.textContent || '').join('');
+    return si.textContent || '';
+  });
+}
+
+function readXlsxCellValue(cell, sharedStrings) {
+  const type = cell.getAttribute('t') || '';
+  const vNode = cell.getElementsByTagName('v')[0];
+  const raw = vNode?.textContent ?? '';
+  if (type === 's') {
+    const idx = Number(raw);
+    return sharedStrings[idx] ?? '';
+  }
+  if (type === 'str') {
+    return raw;
+  }
+  if (type === 'inlineStr' || cell.getElementsByTagName('is').length) {
+    const isNode = cell.getElementsByTagName('is')[0];
+    const tNodes = isNode ? [...isNode.getElementsByTagName('t')] : [...cell.getElementsByTagName('t')];
+    if (tNodes.length) return tNodes.map(node => node.textContent || '').join('');
+  }
+  if (type === 'b') return raw === '1';
+  if (raw === '') return '';
+  const num = Number(raw);
+  return Number.isFinite(num) ? num : raw;
+}
+
+function parseXlsxSheetRows(sheetXml, sharedStrings, maxCols = 8) {
+  const doc = new DOMParser().parseFromString(sheetXml, 'application/xml');
+  return [...doc.getElementsByTagName('row')].map(row => {
+    const cells = [...row.getElementsByTagName('c')];
+    const sparse = {};
+    let nextCol = 0;
+    cells.forEach(cell => {
+      const ref = cell.getAttribute('r') || '';
+      let idx;
+      if (ref) {
+        idx = colLetterToIndex(colLettersFromCellRef(ref));
+        nextCol = idx + 1;
+      } else {
+        idx = nextCol;
+        nextCol += 1;
+      }
+      if (idx >= 0 && idx < maxCols) sparse[idx] = readXlsxCellValue(cell, sharedStrings);
+    });
+    return Array.from({ length: maxCols }, (_, i) => sparse[i] ?? '');
+  });
+}
+
+function listXlsxSheetPaths(files) {
+  const workbookXml = new TextDecoder().decode(files['xl/workbook.xml'] || new Uint8Array());
+  const relsXml = new TextDecoder().decode(files['xl/_rels/workbook.xml.rels'] || new Uint8Array());
+  if (!workbookXml || !relsXml) return [];
+  const relDoc = new DOMParser().parseFromString(relsXml, 'application/xml');
+  const relMap = {};
+  [...relDoc.getElementsByTagName('Relationship')].forEach(rel => {
+    relMap[rel.getAttribute('Id') || ''] = rel.getAttribute('Target') || '';
+  });
+  const wbDoc = new DOMParser().parseFromString(workbookXml, 'application/xml');
+  return [...wbDoc.getElementsByTagName('sheet')]
+    .map(sheet => {
+      const relId =
+        sheet.getAttribute('r:id') ||
+        sheet.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id');
+      const target = relMap[relId || ''];
+      if (!target) return null;
+      const normalized = target.replace(/^\//, '').replace(/^\.\.\//, '');
+      const path = normalized.startsWith('xl/') ? normalized : `xl/${normalized}`;
+      return {
+        name: String(sheet.getAttribute('name') || ''),
+        path
+      };
+    })
+    .filter(Boolean);
+}
+
+function resolveXlsxSheetPath(files, preferredName) {
+  const workbookXml = new TextDecoder().decode(files['xl/workbook.xml'] || new Uint8Array());
+  const relsXml = new TextDecoder().decode(files['xl/_rels/workbook.xml.rels'] || new Uint8Array());
+  if (!workbookXml || !relsXml) return null;
+  const relDoc = new DOMParser().parseFromString(relsXml, 'application/xml');
+  const relMap = {};
+  [...relDoc.getElementsByTagName('Relationship')].forEach(rel => {
+    relMap[rel.getAttribute('Id') || ''] = rel.getAttribute('Target') || '';
+  });
+  const wbDoc = new DOMParser().parseFromString(workbookXml, 'application/xml');
+  const sheets = [...wbDoc.getElementsByTagName('sheet')];
+  const wanted = sheets.find(s => String(s.getAttribute('name') || '').toLowerCase() === preferredName.toLowerCase());
+  const sheet = wanted || sheets.find(s => String(s.getAttribute('name') || '').toLowerCase() === 'sessions') || sheets[sheets.length - 1];
+  if (!sheet) return null;
+  const relId =
+    sheet.getAttribute('r:id') ||
+    sheet.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id');
+  const target = relMap[relId || ''];
+  if (!target) return null;
+  const normalized = target.replace(/^\//, '').replace(/^\.\.\//, '');
+  return normalized.startsWith('xl/') ? normalized : `xl/${normalized}`;
+}
+
+function parseImportDate(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const epoch = Date.UTC(1899, 11, 30);
+    const serial = value >= 1 ? Math.floor(value) : value;
+    const ms = epoch + Math.round(serial * 86400000);
+    const d = new Date(ms);
+    if (Number.isNaN(d.getTime())) return null;
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  }
+  const raw = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const m = raw.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/);
+  if (!m) return null;
+  let a = Number(m[1]);
+  let b = Number(m[2]);
+  let y = Number(m[3]);
+  if (y < 100) y += 2000;
+  const american = normalizeDateFormat(state.settings.dateFormat) === 'american';
+  const day = american ? b : a;
+  const month = american ? a : b;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+/** Excel/Numbers serial time (0–1 day fraction) or HH:MM(:SS) text. */
+function parseImportTime(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    let fraction = value;
+    if (fraction >= 1) {
+      fraction -= Math.floor(fraction);
+      if (fraction <= 0) return null;
+    }
+    if (fraction >= 0 && fraction < 1) {
+      const totalSec = Math.round(fraction * 24 * 3600);
+      if (totalSec < 1) return '00:00:00';
+      return formatClockValueSec(Math.min(totalSec, 24 * 3600));
+    }
+  }
+  const text = String(value).trim().replace(/\./g, ':');
+  const ampm = text.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)$/i);
+  if (ampm) {
+    let hh = Number(ampm[1]);
+    const mm = Number(ampm[2]);
+    const ss = Number(ampm[3] || 0);
+    const mer = ampm[4].toLowerCase();
+    if (hh === 12) hh = mer === 'am' ? 0 : 12;
+    else if (mer === 'pm') hh += 12;
+    if (hh > 23 || mm > 59 || ss > 59) return null;
+    return formatClockValueSec(hh * 3600 + mm * 60 + ss);
+  }
+  const normalized = normalizeClockString(value);
+  return normalized || null;
+}
+
+function parseImportBreak(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value >= 0 && value < 1) {
+      return Math.round(value * 24 * 3600);
+    }
+  }
+  const raw = String(value ?? '').trim();
+  if (!raw || raw === '—' || raw === '-' || raw === '–') return 0;
+  const secs = parseClockToSeconds(raw);
+  return secs == null ? null : secs;
+}
+
+function parseImportOptionalRate(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.max(0, value);
+  }
+  const raw = String(value ?? '').trim();
+  if (!raw) return undefined;
+  const n = Number(raw.replace(',', '.'));
+  return Number.isFinite(n) ? Math.max(0, n) : undefined;
+}
+
+function isSessionImportHeaderRow(row) {
+  const first = String(row[0] ?? '').trim().toLowerCase();
+  const headers = new Set([
+    SESSION_IMPORT_TEMPLATE_HEADERS[0].toLowerCase(),
+    tr('colDate').toLowerCase(),
+    'date',
+    'data',
+    'datum',
+    'fecha',
+    'fechas'
+  ]);
+  return headers.has(first);
+}
+
+function isSessionImportTotalRow(row) {
+  const desc = String(row[4] ?? '').trim().toLowerCase();
+  const totalLabel = tr('grandTotal').toLowerCase();
+  return desc === totalLabel || desc === 'grand total' || desc === 'totale' || desc === 'total';
+}
+
+function isSessionImportEmptyRow(row) {
+  return row.every(cell => String(cell ?? '').trim() === '');
+}
+
+function filterSessionImportDataRows(rows) {
+  return rows.filter((row, idx) => {
+    if (idx === 0 && isSessionImportHeaderRow(row)) return false;
+    if (isSessionImportEmptyRow(row)) return false;
+    if (isSessionImportTotalRow(row)) return false;
+    return true;
+  });
+}
+
+async function parseSessionImportXlsx(bytes) {
+  const files = await unzipBytes(bytes);
+  const sharedStrings = parseSharedStringsXml(
+    files['xl/sharedStrings.xml'] ? new TextDecoder().decode(files['xl/sharedStrings.xml']) : ''
+  );
+  const sheetEntries = listXlsxSheetPaths(files);
+  const ordered = [
+    ...sheetEntries.filter(s => s.name.toLowerCase() === 'sessions'),
+    ...sheetEntries.filter(s => s.name.toLowerCase() !== 'sessions')
+  ];
+  if (!ordered.length) {
+    const fallback = resolveXlsxSheetPath(files, 'Sessions');
+    if (fallback && files[fallback]) ordered.push({ name: 'Sessions', path: fallback });
+  }
+
+  let best = null;
+  for (const entry of ordered) {
+    if (!files[entry.path]) continue;
+    const rows = parseXlsxSheetRows(new TextDecoder().decode(files[entry.path]), sharedStrings);
+    const dataRows = filterSessionImportDataRows(rows);
+    if (!best || dataRows.length > best.rows.length) {
+      best = { rows: dataRows, sheetPath: entry.path, sheetName: entry.name };
+    }
+  }
+
+  if (!best?.rows.length) {
+    throw new Error(tr('sessionImportSheetMissing'));
+  }
+  return best;
+}
+
+function validateSessionImportRow(row, lineNum) {
+  const date = parseImportDate(row[0]);
+  const start = parseImportTime(row[1]);
+  const end = parseImportTime(row[2]);
+  const breakSec = parseImportBreak(row[3]);
+  const description = String(row[4] ?? '').trim();
+  const rate = parseImportOptionalRate(row[6]);
+
+  if (!date) {
+    return { ok: false, line: lineNum, error: tr('sessionImportErrDate', { line: lineNum }) };
+  }
+  if (!start) {
+    return { ok: false, line: lineNum, error: tr('sessionImportErrStart', { line: lineNum }) };
+  }
+  if (!end) {
+    return { ok: false, line: lineNum, error: tr('sessionImportErrEnd', { line: lineNum }) };
+  }
+  if (breakSec == null) {
+    return { ok: false, line: lineNum, error: tr('sessionImportErrPause', { line: lineNum }) };
+  }
+
+  const dur = durationFromClocks(start, end, breakSec);
+  if (dur == null || dur < 1) {
+    return { ok: false, line: lineNum, error: tr('sessionImportErrDuration', { line: lineNum }) };
+  }
+
+  return {
+    ok: true,
+    line: lineNum,
+    session: {
+      date,
+      start,
+      end,
+      breakMin: breakSec,
+      description,
+      durationMin: dur,
+      ...(rate != null ? { rate } : {})
+    }
+  };
+}
+
+async function importValidatedSessionRows(validRows, project) {
+  const stamp = Date.now();
+  let count = 0;
+  for (let i = 0; i < validRows.length; i += 1) {
+    const item = validRows[i];
+    const { date, start, end, breakMin, description, durationMin, rate } = item.session;
+    if (manualEntrySpansOvernight(start, end)) {
+      const startSec = parseClockToSeconds(start);
+      const endSec = parseClockToSeconds(end);
+      const span1 = 24 * 3600 - startSec;
+      const span2 = endSec;
+      const [break1, break2] = splitOvernightBreakSec(breakMin, span1, span2);
+      const dur1 = span1 - break1;
+      const dur2 = span2 - break2;
+      if (dur1 >= 1) {
+        await upsertSessionLocal(
+          {
+            id: `s${stamp}-${i}-1`,
+            projectId: project.id,
+            project: project.name,
+            client: project.client,
+            date,
+            start,
+            end: '24:00:00',
+            breakMin: break1,
+            description,
+            durationMin: dur1,
+            ...(rate != null ? { rate } : {})
+          },
+          { isNew: true, throwOnError: true }
+        );
+        count += 1;
+      }
+      if (dur2 >= 1) {
+        await upsertSessionLocal(
+          {
+            id: `s${stamp}-${i}-2`,
+            projectId: project.id,
+            project: project.name,
+            client: project.client,
+            date: addDaysToIsoDate(date, 1),
+            start: '00:00:00',
+            end,
+            breakMin: break2,
+            description,
+            durationMin: dur2,
+            ...(rate != null ? { rate } : {})
+          },
+          { isNew: true, throwOnError: true }
+        );
+        count += 1;
+      }
+    } else {
+      await upsertSessionLocal(
+        {
+          id: `s${stamp}-${i}`,
+          projectId: project.id,
+          project: project.name,
+          client: project.client,
+          date,
+          start,
+          end,
+          breakMin,
+          description,
+          durationMin: durationMin,
+          ...(rate != null ? { rate } : {})
+        },
+        { isNew: true, throwOnError: true }
+      );
+      count += 1;
+    }
+  }
+  return count;
+}
+
+/** Fixed English headers for the downloadable import template (locale-independent). */
+const SESSION_IMPORT_TEMPLATE_HEADERS = [
+  'Date',
+  'Time Start',
+  'Time End',
+  'Time Pause',
+  'Description',
+  'Hours',
+  'Rate',
+  'Total'
+];
+const SESSION_IMPORT_TEMPLATE_EXAMPLE = 'Example: draft review';
+
+/** Downloadable template — English column headers; UI labels stay translated. */
+function sessionImportTemplateXlsxBytes() {
+  const cell = (ref, value, type = 'inlineStr') => {
+    if (type === 'n') return `<c r="${ref}"><v>${value}</v></c>`;
+    return `<c r="${ref}" t="inlineStr"><is><t>${escapeXml(value)}</t></is></c>`;
+  };
+  const rowXml = (r, values, types = []) => {
+    const cells = values
+      .map((v, i) => cell(`${String.fromCharCode(65 + i)}${r}`, v, types[i] || 'inlineStr'))
+      .join('');
+    return `<row r="${r}">${cells}</row>`;
+  };
+  const today = formatReportDate(new Date());
+  const sessionRows = [
+    rowXml(1, SESSION_IMPORT_TEMPLATE_HEADERS),
+    rowXml(2, [
+      today,
+      '09.00.00',
+      '12.30.00',
+      '00.15.00',
+      SESSION_IMPORT_TEMPLATE_EXAMPLE,
+      '03.15.00',
+      Number(state.settings.defaultRate || 0).toFixed(2),
+      ''
+    ], ['s', 's', 's', 's', 's', 's', 'n', 's'])
+  ].join('');
+  const sheet =
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+    `<cols>` +
+    `<col min="1" max="1" width="14" customWidth="1"/>` +
+    `<col min="2" max="4" width="12" customWidth="1"/>` +
+    `<col min="5" max="5" width="42" customWidth="1"/>` +
+    `<col min="6" max="8" width="12" customWidth="1"/>` +
+    `</cols>` +
+    `<sheetData>${sessionRows}</sheetData></worksheet>`;
+  return zipStore({
+    '[Content_Types].xml':
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+      `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
+      `<Default Extension="xml" ContentType="application/xml"/>` +
+      `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>` +
+      `<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` +
+      `</Types>`,
+    '_rels/.rels':
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+      `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>` +
+      `</Relationships>`,
+    'xl/workbook.xml':
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ` +
+      `xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
+      `<sheets><sheet name="Sessions" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+    'xl/_rels/workbook.xml.rels':
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+      `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>` +
+      `</Relationships>`,
+    'xl/worksheets/sheet1.xml': sheet
+  });
+}
+
+async function openSessionImportFileDialog() {
+  return pickSessionImportViaInput();
+}
+
+let appDialogState = null;
+
+function ensureAppDialogShell() {
+  let backdrop = document.getElementById('appDialogModal');
+  if (backdrop) return backdrop;
+  backdrop = document.createElement('div');
+  backdrop.id = 'appDialogModal';
+  backdrop.className = 'modal-backdrop';
+  backdrop.hidden = true;
+  backdrop.innerHTML =
+    '<div class="modal modal--info" role="dialog" aria-modal="true">' +
+    '<div class="modal__head"><h2 id="appDialogTitle"></h2></div>' +
+    '<div class="modal__body"><pre id="appDialogMessage" style="white-space:pre-wrap;font-family:inherit;margin:0"></pre></div>' +
+    '<div class="modal__foot" id="appDialogFoot"></div>' +
+    '</div>';
+  document.body.appendChild(backdrop);
+  backdrop.addEventListener('click', e => {
+    if (e.target === backdrop && appDialogState?.allowBackdropCancel) {
+      appDialogState.resolve(false);
+      closeAppDialog();
+    }
+  });
+  return backdrop;
+}
+
+function closeAppDialog() {
+  const backdrop = document.getElementById('appDialogModal');
+  if (backdrop) backdrop.hidden = true;
+  appDialogState = null;
+}
+
+function showAppDialog({ title, message, mode = 'alert', primary, secondary }) {
+  return new Promise(resolve => {
+    const backdrop = ensureAppDialogShell();
+    $('appDialogTitle').textContent = title || tr('appName') || 'Musomo Tracker';
+    $('appDialogMessage').textContent = message;
+    const foot = $('appDialogFoot');
+    foot.innerHTML = '';
+    appDialogState = { resolve, allowBackdropCancel: mode === 'confirm' };
+
+    const finish = value => {
+      if (!appDialogState) return;
+      appDialogState.resolve(value);
+      closeAppDialog();
+    };
+
+    if (mode === 'confirm') {
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.className = 'btn btn--ghost';
+      cancelBtn.textContent = secondary || tr('cancel');
+      cancelBtn.addEventListener('click', () => finish(false));
+      const okBtn = document.createElement('button');
+      okBtn.type = 'button';
+      okBtn.className = 'btn btn--primary';
+      okBtn.textContent = primary || tr('importSessions');
+      okBtn.addEventListener('click', () => finish(true));
+      foot.append(cancelBtn, okBtn);
+      okBtn.focus();
+    } else {
+      const okBtn = document.createElement('button');
+      okBtn.type = 'button';
+      okBtn.className = 'btn btn--primary';
+      okBtn.textContent = 'OK';
+      okBtn.addEventListener('click', () => finish(true));
+      foot.append(okBtn);
+      okBtn.focus();
+    }
+    backdrop.hidden = false;
+  });
+}
+
+function pickSessionImportViaInput() {
+  return new Promise(resolve => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0];
+      if (!file) {
+        resolve(null);
+        return;
+      }
+      resolve({ bytes: new Uint8Array(await file.arrayBuffer()), path: file.name });
+    });
+    input.addEventListener('cancel', () => resolve(null));
+    input.click();
+  });
+}
+
+async function downloadSessionImportTemplate() {
+  const bytes = sessionImportTemplateXlsxBytes();
+  const saved = await saveBytesFile('musomo-sessions-template.xlsx', bytes);
+  alert(tr('sessionImportTemplateSaved', { path: savedFileName(saved) || 'musomo-sessions-template.xlsx' }));
+  await openSavedFile(saved);
+}
+
+async function appMessage(message, title) {
+  await showAppDialog({ mode: 'alert', title: title || tr('appName'), message });
+}
+
+async function appConfirmImport(message, title) {
+  return showAppDialog({
+    mode: 'confirm',
+    title: title || tr('importSessions'),
+    message,
+    primary: tr('importSessions'),
+    secondary: tr('cancel')
+  });
+}
+
+function normalizeDialogPath(path) {
+  let p = String(path || '').trim();
+  if (!p) return p;
+  if (p.startsWith('file://')) {
+    try {
+      p = decodeURIComponent(new URL(p).pathname);
+    } catch (_) {
+      p = p.replace(/^file:\/\//, '');
+    }
+  }
+  return p;
+}
+
+function resetSessionsViewFiltersForImport(projectId) {
+  state.sessionsView.dateFrom = '';
+  state.sessionsView.dateTo = '';
+  state.sessionsView.clientId = 'all';
+  state.sessionsView.projectId = projectId || 'all';
+  state.sessionsView.query = '';
+}
+
+async function runSessionImportFromSettings(projectId) {
+  const project = state.projects.items.find(p => p.id === projectId);
+  if (!project) {
+    await appMessage(tr('sessionImportSelectProject'), tr('importSessions'));
+    return;
+  }
+  const picked = await openSessionImportFileDialog();
+  if (!picked?.bytes?.length) return;
+
+  try {
+    const { rows } = await parseSessionImportXlsx(picked.bytes);
+    if (!rows.length) {
+      await appMessage(tr('sessionImportNoRows'), tr('importSessions'));
+      return;
+    }
+
+    const valid = [];
+    const invalid = [];
+    rows.forEach((row, idx) => {
+      const result = validateSessionImportRow(row, idx + 2);
+      if (result.ok) valid.push(result);
+      else invalid.push(result);
+    });
+
+    if (!valid.length) {
+      const details = invalid
+        .slice(0, 8)
+        .map(item => item.error)
+        .join('\n');
+      await appMessage(tr('sessionImportPreviewErrors', { count: invalid.length, details }), tr('importSessions'));
+      return;
+    }
+
+    const imported = await importValidatedSessionRows(valid, project);
+    resetSessionsViewFiltersForImport(project.id);
+    setPage('sessions');
+    refreshAfterSessionChange();
+
+    let doneMessage = tr('sessionImportDone', { count: imported });
+    if (invalid.length > 0) {
+      const details = invalid
+        .slice(0, 5)
+        .map(item => item.error)
+        .join('\n');
+      doneMessage += `\n\n${tr('sessionImportPreviewErrors', { count: invalid.length, details })}`;
+    }
+    await appMessage(doneMessage, tr('importSessions'));
+  } catch (err) {
+    await appMessage(tr('sessionImportFailed', { error: String(err?.message || err) }), tr('importSessions'));
+  }
+}
+
 async function saveTextFile(fileName, text, mime = 'text/plain;charset=utf-8') {
   const bytes = Array.from(new TextEncoder().encode(text));
   if (window.__TAURI__?.core?.invoke) {
@@ -5837,7 +6601,7 @@ function renderReports() {
     </div>
   `;
 
-  const refreshPreview = (opts = {}) => {
+  const refreshPreview = async (opts = {}) => {
     const preview = $('reportPreview');
     if (preview) preview.innerHTML = renderReportDocument();
     if (opts.flash) {
@@ -5891,7 +6655,8 @@ function renderReports() {
     state.reports.projectId = e.target.value;
     refreshPreview();
   });
-  $('btnGenerateReport')?.addEventListener('click', () => refreshPreview({ flash: true }));
+  $('btnGenerateReport')?.addEventListener('click', () => void refreshPreview({ flash: true }));
+  refreshPreview();
   root.querySelectorAll('[data-export]').forEach(btn => {
     btn.addEventListener('click', () => {
       void exportReport(btn.dataset.export);
@@ -6524,13 +7289,13 @@ function bindMiniTimerSync() {
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
       drainPendingMiniAction();
-      maybeRolloverTimerDay();
+      void rolloverTimerAtMidnight();
       syncTimerUi();
     }
   });
   window.addEventListener('focus', () => {
     drainPendingMiniAction();
-    maybeRolloverTimerDay();
+    void rolloverTimerAtMidnight();
     syncTimerUi();
   });
 

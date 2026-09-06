@@ -149,6 +149,9 @@ pub struct TrackerModuleSettings {
     /// Display dates: "european" (DD/MM/YYYY) or "american" (MM/DD/YYYY). Storage stays ISO.
     #[serde(default = "default_date_format_european")]
     pub date_format: String,
+    /// PRO plan — unlocks Screenshot lavoro and related exports.
+    #[serde(default)]
+    pub pro_enabled: bool,
 }
 
 fn default_date_format_european() -> String {
@@ -179,6 +182,8 @@ pub struct TrackerArchiveEntry {
     pub name: String,
     pub label: String,
     pub created_at: i64,
+    #[serde(default)]
+    pub is_auto: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

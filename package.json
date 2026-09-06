@@ -1,7 +1,7 @@
 {
   "name": "musomo-tracker",
   "private": true,
-  "version": "1.4.0",
+  "version": "1.4.2",
   "type": "module",
   "scripts": {
     "sync-version": "node scripts/sync-version.mjs",
@@ -12,7 +12,8 @@
     "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build",
-    "stage-dist": "bash scripts/stage-dist.sh"
+    "stage-dist": "bash scripts/stage-dist.sh",
+    "test": "cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

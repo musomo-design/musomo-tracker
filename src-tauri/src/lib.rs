@@ -116,6 +116,12 @@ fn uniquify_download_path(candidate: PathBuf) -> PathBuf {
 }
 
 #[tauri::command]
+fn read_file_bytes(path: String) -> Result<Vec<u8>, String> {
+    let path_buf = normalize_path(path)?;
+    std::fs::read(&path_buf).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn save_downloaded_file(file_name: String, bytes: Vec<u8>) -> Result<String, String> {
     if bytes.is_empty() {
         return Err("The export was empty.".to_string());
@@ -307,21 +313,48 @@ async fn tracker_confirm_dialog(
 ) -> Result<bool, String> {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
-    let (tx, mut rx) = tauri::async_runtime::channel::<bool>(1);
-    let dialog_title = if title.trim().is_empty() {
-        "Musomo Tracker".to_string()
-    } else {
-        title
-    };
-    app.dialog()
-        .message(message)
-        .title(dialog_title)
-        .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancel)
-        .show(move |ok| {
-            let _ = tx.blocking_send(ok);
-        });
-    Ok(rx.recv().await.unwrap_or(false))
+    tauri::async_runtime::spawn_blocking(move || {
+        let dialog_title = if title.trim().is_empty() {
+            "Musomo Tracker".to_string()
+        } else {
+            title
+        };
+        app.dialog()
+            .message(message)
+            .title(dialog_title)
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancel)
+            .blocking_show()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn tracker_two_choice_dialog(
+    app: tauri::AppHandle,
+    title: String,
+    message: String,
+    primary: String,
+    secondary: String,
+) -> Result<bool, String> {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let dialog_title = if title.trim().is_empty() {
+            "Musomo Tracker".to_string()
+        } else {
+            title
+        };
+        app.dialog()
+            .message(message)
+            .title(dialog_title)
+            .kind(MessageDialogKind::Info)
+            .buttons(MessageDialogButtons::OkCancelCustom(primary, secondary))
+            .blocking_show()
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -336,40 +369,41 @@ async fn tracker_session_close_dialog(
         DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
     };
 
-    let (tx, mut rx) = tauri::async_runtime::channel::<Option<String>>(1);
-    let dialog_title = if title.trim().is_empty() {
-        "Musomo Tracker".to_string()
-    } else {
-        title
-    };
-    app.dialog()
-        .message("")
-        .title(dialog_title)
-        .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::YesNoCancelCustom(
-            save_close.clone(),
-            save_pause.clone(),
-            dont_save.clone(),
-        ))
-        .show_with_result(move |res| {
-            let choice = match res {
-                MessageDialogResult::Custom(label) if label == save_close => {
-                    Some("save_close".to_string())
-                }
-                MessageDialogResult::Custom(label) if label == save_pause => {
-                    Some("save_pause".to_string())
-                }
-                MessageDialogResult::Custom(label) if label == dont_save => {
-                    Some("discard".to_string())
-                }
-                MessageDialogResult::Yes => Some("save_close".to_string()),
-                MessageDialogResult::No => Some("save_pause".to_string()),
-                MessageDialogResult::Cancel => Some("discard".to_string()),
-                _ => None,
-            };
-            let _ = tx.blocking_send(choice);
-        });
-    Ok(rx.recv().await.unwrap_or(None))
+    tauri::async_runtime::spawn_blocking(move || {
+        let dialog_title = if title.trim().is_empty() {
+            "Musomo Tracker".to_string()
+        } else {
+            title
+        };
+        let res = app
+            .dialog()
+            .message("")
+            .title(dialog_title)
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::YesNoCancelCustom(
+                save_close.clone(),
+                save_pause.clone(),
+                dont_save.clone(),
+            ))
+            .blocking_show_with_result();
+        match res {
+            MessageDialogResult::Custom(label) if label == save_close => {
+                Some("save_close".to_string())
+            }
+            MessageDialogResult::Custom(label) if label == save_pause => {
+                Some("save_pause".to_string())
+            }
+            MessageDialogResult::Custom(label) if label == dont_save => {
+                Some("discard".to_string())
+            }
+            MessageDialogResult::Yes => Some("save_close".to_string()),
+            MessageDialogResult::No => Some("save_pause".to_string()),
+            MessageDialogResult::Cancel => Some("discard".to_string()),
+            _ => None,
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -420,11 +454,13 @@ pub fn run() {
             tracker_studio::tracker_save_brand_image,
             tracker_studio::tracker_import_brand_file,
             save_downloaded_file,
+            read_file_bytes,
             open_url,
             open_file,
             compose_mail_with_attachment,
             allow_app_exit,
             tracker_confirm_dialog,
+            tracker_two_choice_dialog,
             tracker_session_close_dialog,
         ])
         .build(tauri::generate_context!())
@@ -438,7 +474,7 @@ pub fn run() {
                 {
                     return;
                 }
-                if tracker_studio::TimerRuntimeStore::has_running_open_timer(&app_handle) {
+                if tracker_studio::TimerRuntimeStore::has_active_open_timer(&app_handle) {
                     api.prevent_exit();
                     use tauri::{Emitter, Manager};
                     if let Some(window) = app_handle.get_webview_window("main") {

@@ -295,62 +295,81 @@ pub fn create_named_backup(label: String) -> Result<String, String> {
 
 pub fn list_archives() -> Result<Vec<TrackerArchiveEntry>, String> {
     migrate_legacy_archives()?;
-    let dir = archive_dir()?;
-    if !dir.exists() {
-        return Ok(vec![]);
-    }
-    let auto_dir = auto_archive_dir()?;
     let mut entries = vec![];
-    for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
-        if path.is_dir() {
-            continue;
+    let dir = archive_dir()?;
+    let auto_dir = auto_archive_dir()?;
+    if dir.exists() {
+        for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            if path.is_dir() {
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("db") {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !name.starts_with("tracker-backup-") || name.starts_with("tracker-backup-auto-") {
+                continue;
+            }
+            entries.push(TrackerArchiveEntry {
+                name: name.to_string(),
+                label: parse_manual_label(name),
+                created_at: file_created_at(&path, name),
+                is_auto: false,
+            });
         }
-        if auto_dir == path {
-            continue;
+    }
+    if auto_dir.exists() {
+        for entry in fs::read_dir(&auto_dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("db") {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !name.starts_with("tracker-backup-") {
+                continue;
+            }
+            entries.push(TrackerArchiveEntry {
+                name: format!("auto/{name}"),
+                label: String::new(),
+                created_at: file_created_at(&path, name),
+                is_auto: true,
+            });
         }
-        if path.extension().and_then(|e| e.to_str()) != Some("db") {
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        if !name.starts_with("tracker-backup-") {
-            continue;
-        }
-        entries.push(TrackerArchiveEntry {
-            name: name.to_string(),
-            label: parse_manual_label(name),
-            created_at: file_created_at(&path, name),
-        });
     }
     entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     Ok(entries)
 }
 
-fn safe_manual_archive_path(name: &str) -> Result<PathBuf, String> {
-    let base = name
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(name)
-        .to_string();
+fn safe_archive_path(name: &str) -> Result<PathBuf, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed.contains("..") {
+        return Err("Invalid archive name.".into());
+    }
+    let (base, in_auto) = if let Some(rest) = trimmed.strip_prefix("auto/") {
+        (rest.to_string(), true)
+    } else {
+        (trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed).to_string(), false)
+    };
     if !base.starts_with("tracker-backup-") || !base.ends_with(".db") {
         return Err("Invalid archive name.".into());
     }
-    if base.contains("..") || base.starts_with("tracker-backup-auto-") {
-        return Err("Invalid archive name.".into());
-    }
-    let path = archive_dir()?.join(&base);
-    let auto_dir = auto_archive_dir()?;
-    if path.starts_with(&auto_dir) {
-        return Err("Invalid archive name.".into());
-    }
+    let path = if in_auto || base.starts_with("tracker-backup-auto-") {
+        auto_archive_dir()?.join(&base)
+    } else {
+        archive_dir()?.join(&base)
+    };
     Ok(path)
 }
 
 pub fn delete_archive(name: String) -> Result<(), String> {
-    let path = safe_manual_archive_path(&name)?;
+    let path = safe_archive_path(&name)?;
     if !path.exists() {
         return Err("Archive not found.".into());
     }
@@ -361,7 +380,7 @@ pub fn delete_archive(name: String) -> Result<(), String> {
 /// Restore full studio snapshot from an archive (data + settings + branding).
 pub fn restore_from_archive(name: String) -> Result<TrackerSnapshot, String> {
     let _safety = archive_current_database()?;
-    let archive_path = safe_manual_archive_path(&name)?;
+    let archive_path = safe_archive_path(&name)?;
     if !archive_path.exists() {
         return Err("Archive not found.".into());
     }
@@ -626,7 +645,7 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             [],
         )
         .ok();
-        conn.pragma_update(None, "user_version", DB_VERSION)
+        conn.pragma_update(None, "user_version", 7)
             .map_err(|e| e.to_string())?;
     }
 
@@ -682,6 +701,7 @@ fn demo_settings() -> TrackerModuleSettings {
         report_header_note: String::new(),
         ui_theme: "dark".into(),
         date_format: "european".into(),
+        pro_enabled: false,
     }
 }
 
@@ -1249,6 +1269,7 @@ fn load_module_settings(conn: &Connection) -> Result<TrackerModuleSettings, Stri
         report_header_note: String::new(),
         ui_theme: "dark".into(),
         date_format: "european".into(),
+        pro_enabled: false,
     };
     let mut stmt = conn
         .prepare("SELECT key, value FROM settings")
@@ -1278,6 +1299,9 @@ fn load_module_settings(conn: &Connection) -> Result<TrackerModuleSettings, Stri
                 settings.ui_theme = if t == "dark" { "dark".into() } else { "light".into() };
             }
             "date_format" => settings.date_format = normalize_date_format(&value),
+            "pro_enabled" => {
+                settings.pro_enabled = value == "1" || value.eq_ignore_ascii_case("true");
+            }
             _ => {}
         }
     }
@@ -1526,6 +1550,10 @@ fn save_module_settings(conn: &Connection, settings: &TrackerModuleSettings) -> 
         ("report_header_note", settings.report_header_note.as_str()),
         ("ui_theme", settings.ui_theme.as_str()),
         ("date_format", settings.date_format.as_str()),
+        (
+            "pro_enabled",
+            if settings.pro_enabled { "1" } else { "0" },
+        ),
     ];
     for (key, value) in pairs {
         conn.execute(
@@ -1793,3 +1821,4 @@ fn seed_sessions() -> Vec<TrackerSession> {
         },
     ]
 }
+
