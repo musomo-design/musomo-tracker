@@ -3,7 +3,7 @@ use rusqlite::{params, Connection};
 use std::fs;
 use std::path::PathBuf;
 
-const DB_VERSION: i32 = 7;
+const DB_VERSION: i32 = 11;
 
 pub fn db_path() -> Result<PathBuf, String> {
     let base = dirs::data_dir().ok_or_else(|| "No data directory.".to_string())?;
@@ -59,6 +59,7 @@ fn copy_database_to_path(dest: &std::path::Path) -> Result<(), String> {
     }
     fs::copy(&src, dest).map_err(|e| e.to_string())?;
     snapshot_brand_assets_for_archive(dest)?;
+    snapshot_screenshots_for_archive(dest)?;
     Ok(())
 }
 
@@ -124,6 +125,102 @@ fn remove_brand_assets_sidecar(db_path: &std::path::Path) {
     if sidecar.is_dir() {
         let _ = fs::remove_dir_all(&sidecar);
     }
+}
+
+fn screenshots_sidecar_path(db_path: &std::path::Path) -> PathBuf {
+    let stem = db_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("backup");
+    db_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join(format!("{stem}.screenshots"))
+}
+
+fn copy_dir_recursive(src: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
+    if !src.is_dir() {
+        return Ok(());
+    }
+    fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|e| e.to_string())?;
+        let target = dest.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&path, &target)?;
+        } else if file_type.is_file() {
+            fs::copy(&path, &target).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn dir_is_empty(path: &std::path::Path) -> bool {
+    fs::read_dir(path)
+        .map(|mut entries| entries.next().is_none())
+        .unwrap_or(true)
+}
+
+fn snapshot_screenshots_for_archive(db_path: &std::path::Path) -> Result<(), String> {
+    let sidecar = screenshots_sidecar_path(db_path);
+    if sidecar.exists() {
+        fs::remove_dir_all(&sidecar).map_err(|e| e.to_string())?;
+    }
+    let src = screenshots_dir()?;
+    if !src.is_dir() {
+        return Ok(());
+    }
+    copy_dir_recursive(&src, &sidecar)?;
+    if dir_is_empty(&sidecar) {
+        let _ = fs::remove_dir_all(&sidecar);
+    }
+    Ok(())
+}
+
+fn clear_screenshots_dir() -> Result<(), String> {
+    let dir = screenshots_dir()?;
+    if dir.exists() {
+        fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+    }
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn restore_screenshots_from_sidecar(db_path: &std::path::Path) -> Result<(), String> {
+    let sidecar = screenshots_sidecar_path(db_path);
+    clear_screenshots_dir()?;
+    if !sidecar.is_dir() {
+        return Ok(());
+    }
+    copy_dir_recursive(&sidecar, &screenshots_dir()?)?;
+    Ok(())
+}
+
+fn archive_includes_screenshots(db_path: &std::path::Path) -> bool {
+    screenshots_sidecar_path(db_path).is_dir()
+}
+
+fn remove_screenshots_sidecar(db_path: &std::path::Path) {
+    let sidecar = screenshots_sidecar_path(db_path);
+    if sidecar.is_dir() {
+        let _ = fs::remove_dir_all(&sidecar);
+    }
+}
+
+fn remove_archive_sidecars(db_path: &std::path::Path) {
+    remove_brand_assets_sidecar(db_path);
+    remove_screenshots_sidecar(db_path);
+}
+
+fn archive_table_exists(conn: &Connection, table: &str) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM archive.sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
+        params![table],
+        |_| Ok(()),
+    )
+    .is_ok()
 }
 
 fn sanitize_backup_label(label: &str) -> Result<String, String> {
@@ -261,7 +358,7 @@ fn prune_auto_backups(keep: usize) -> Result<(), String> {
     }
     files.sort_by(|a, b| b.0.cmp(&a.0));
     for (_, path) in files.into_iter().skip(keep) {
-        remove_brand_assets_sidecar(&path);
+        remove_archive_sidecars(&path);
         let _ = fs::remove_file(path);
     }
     Ok(())
@@ -293,6 +390,25 @@ pub fn create_named_backup(label: String) -> Result<String, String> {
     Ok(name)
 }
 
+pub fn maybe_daily_auto_backup() -> Result<(), String> {
+    let conn = open_db()?;
+    let last = setting_value(&conn, "last_daily_auto_backup_at");
+    let now = chrono_now_ms();
+    if let Ok(last_ms) = last.trim().parse::<i64>() {
+        if last_ms > 0 && now.saturating_sub(last_ms) < 86_400_000 {
+            return Ok(());
+        }
+    }
+    let _ = archive_current_database()?;
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES ('last_daily_auto_backup_at', ?1)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params![now.to_string()],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub fn list_archives() -> Result<Vec<TrackerArchiveEntry>, String> {
     migrate_legacy_archives()?;
     let mut entries = vec![];
@@ -319,6 +435,7 @@ pub fn list_archives() -> Result<Vec<TrackerArchiveEntry>, String> {
                 label: parse_manual_label(name),
                 created_at: file_created_at(&path, name),
                 is_auto: false,
+                includes_screenshots: archive_includes_screenshots(&path),
             });
         }
     }
@@ -338,6 +455,7 @@ pub fn list_archives() -> Result<Vec<TrackerArchiveEntry>, String> {
             entries.push(TrackerArchiveEntry {
                 name: format!("auto/{name}"),
                 label: String::new(),
+                includes_screenshots: archive_includes_screenshots(&path),
                 created_at: file_created_at(&path, name),
                 is_auto: true,
             });
@@ -373,7 +491,7 @@ pub fn delete_archive(name: String) -> Result<(), String> {
     if !path.exists() {
         return Err("Archive not found.".into());
     }
-    remove_brand_assets_sidecar(&path);
+    remove_archive_sidecars(&path);
     fs::remove_file(&path).map_err(|e| e.to_string())
 }
 
@@ -407,10 +525,19 @@ pub fn restore_from_archive(name: String) -> Result<TrackerSnapshot, String> {
         INSERT INTO time_sessions SELECT * FROM archive.time_sessions;
         DELETE FROM settings;
         INSERT INTO settings SELECT key, value FROM archive.settings;
-        DETACH DATABASE archive;
         ",
     )
     .map_err(|e| e.to_string())?;
+
+    if archive_table_exists(&conn, "work_screenshots") {
+        conn.execute("DELETE FROM work_screenshots", [])
+            .map_err(|e| e.to_string())?;
+        conn.execute_batch("INSERT INTO work_screenshots SELECT * FROM archive.work_screenshots")
+            .map_err(|e| e.to_string())?;
+    }
+
+    conn.execute_batch("DETACH DATABASE archive;")
+        .map_err(|e| e.to_string())?;
 
     conn.execute(
         "INSERT INTO settings (key, value) VALUES ('auto_seed_disabled', '1')
@@ -420,6 +547,7 @@ pub fn restore_from_archive(name: String) -> Result<TrackerSnapshot, String> {
     .map_err(|e| e.to_string())?;
 
     restore_brand_assets_from_sidecar(&archive_path)?;
+    restore_screenshots_from_sidecar(&archive_path)?;
 
     let mut settings = load_module_settings(&conn)?;
     migrate_brand_data_urls_to_files(&conn, &mut settings)?;
@@ -649,6 +777,62 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
 
+    if version < 8 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS work_screenshots (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL DEFAULT '',
+                open_session_key TEXT NOT NULL DEFAULT '',
+                project_id TEXT NOT NULL DEFAULT '',
+                project_name TEXT NOT NULL DEFAULT '',
+                client_name TEXT NOT NULL DEFAULT '',
+                session_date TEXT NOT NULL DEFAULT '',
+                captured_at TEXT NOT NULL DEFAULT '',
+                file_name TEXT NOT NULL DEFAULT '',
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_work_screenshots_session ON work_screenshots(session_id);
+            CREATE INDEX IF NOT EXISTS idx_work_screenshots_open_key ON work_screenshots(open_session_key);
+            CREATE INDEX IF NOT EXISTS idx_work_screenshots_date ON work_screenshots(session_date);
+            ",
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('pro_enabled', '0')
+             ON CONFLICT(key) DO NOTHING",
+            [],
+        )
+        .ok();
+        conn.pragma_update(None, "user_version", 8)
+            .map_err(|e| e.to_string())?;
+    }
+
+    if version < 9 {
+        ensure_column(conn, "work_screenshots", "description", "TEXT NOT NULL DEFAULT ''")?;
+        conn.pragma_update(None, "user_version", 9)
+            .map_err(|e| e.to_string())?;
+    }
+
+    if version < 10 {
+        ensure_column(conn, "work_screenshots", "sort_order", "INTEGER NOT NULL DEFAULT 0")?;
+        conn.execute(
+            "UPDATE work_screenshots SET sort_order = CAST(captured_at AS INTEGER)
+             WHERE sort_order = 0 AND captured_at GLOB '[0-9]*'",
+            [],
+        )
+        .ok();
+        conn.pragma_update(None, "user_version", 10)
+            .map_err(|e| e.to_string())?;
+    }
+
+    if version < 11 {
+        ensure_column(conn, "work_screenshots", "thumb_name", "TEXT NOT NULL DEFAULT ''")?;
+        conn.pragma_update(None, "user_version", DB_VERSION)
+            .map_err(|e| e.to_string())?;
+    }
+
     seed_if_empty(conn)?;
     Ok(())
 }
@@ -786,6 +970,8 @@ pub fn reset_database(reseed: bool) -> Result<TrackerSnapshot, String> {
 
 pub fn load_snapshot() -> Result<TrackerSnapshot, String> {
     let conn = open_db()?;
+    let _ = maybe_daily_auto_backup();
+    let _ = repair_work_screenshot_metadata();
     snapshot_from_conn(&conn)
 }
 
@@ -879,6 +1065,7 @@ pub fn upsert_session_record(session: TrackerSession) -> Result<TrackerSession, 
     if !old_project_id.is_empty() && old_project_id != session.project_id {
         recalc_project_hours(&conn, &old_project_id)?;
     }
+    sync_work_screenshots_for_session(&session.id)?;
     Ok(session)
 }
 
@@ -1575,6 +1762,14 @@ fn chrono_now_date() -> String {
     format!("{}", secs / 86400)
 }
 
+fn chrono_now_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 fn seed_clients() -> Vec<TrackerClient> {
     vec![
         TrackerClient {
@@ -1820,5 +2015,455 @@ fn seed_sessions() -> Vec<TrackerSession> {
             period: "week".into(),
         },
     ]
+}
+
+pub fn screenshots_dir() -> Result<PathBuf, String> {
+    let path = db_path()?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "No screenshots directory.".to_string())?;
+    Ok(parent.join("screenshots"))
+}
+
+fn setting_value(conn: &Connection, key: &str) -> String {
+    conn.query_row(
+        "SELECT value FROM settings WHERE key = ?1",
+        params![key],
+        |row| row.get(0),
+    )
+    .unwrap_or_default()
+}
+
+pub fn pro_status() -> Result<ProStatus, String> {
+    Ok(ProStatus {
+        licensed: true,
+        trial_days_left: 0,
+        can_use: true,
+        trial_expired: false,
+    })
+}
+
+pub fn can_use_pro_features() -> Result<bool, String> {
+    Ok(true)
+}
+
+pub fn is_pro_enabled() -> Result<bool, String> {
+    Ok(true)
+}
+
+pub fn activate_pro_license(_license_key: String) -> Result<bool, String> {
+    Ok(true)
+}
+
+fn row_to_work_screenshot(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrackerWorkScreenshot> {
+    let id: String = row.get(0)?;
+    let file_name: String = row.get(8)?;
+    let thumb_name: String = row.get(12).unwrap_or_default();
+    let dir = screenshots_dir().unwrap_or_default();
+    let thumb_path = if thumb_name.trim().is_empty() {
+        String::new()
+    } else {
+        dir.join(&thumb_name).to_string_lossy().into_owned()
+    };
+    Ok(TrackerWorkScreenshot {
+        id: id.clone(),
+        session_id: row.get(1)?,
+        open_session_key: row.get(2)?,
+        project_id: row.get(3)?,
+        project: row.get(4)?,
+        client: row.get(5)?,
+        date: row.get(6)?,
+        captured_at: row.get(7)?,
+        file_path: dir.join(&file_name).to_string_lossy().into_owned(),
+        thumb_path,
+        note: row.get(9)?,
+        description: row.get(10).unwrap_or_default(),
+        sort_order: row.get(11).unwrap_or(0),
+    })
+}
+
+pub fn insert_work_screenshot(row: &TrackerWorkScreenshot) -> Result<(), String> {
+    let conn = open_db()?;
+    let file_name = PathBuf::from(&row.file_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    let thumb_name = PathBuf::from(&row.thumb_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    let sort_order: i32 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM work_screenshots",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(1);
+    conn.execute(
+        "INSERT INTO work_screenshots (
+            id, session_id, open_session_key, project_id, project_name, client_name,
+            session_date, captured_at, file_name, note, created_at, description, sort_order, thumb_name
+        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+        params![
+            row.id,
+            row.session_id,
+            row.open_session_key,
+            row.project_id,
+            row.project,
+            row.client,
+            row.date,
+            row.captured_at,
+            file_name,
+            row.note,
+            row.captured_at,
+            row.description,
+            if row.sort_order > 0 { row.sort_order } else { sort_order },
+            thumb_name,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn list_work_screenshots(filter: WorkScreenshotFilter) -> Result<Vec<TrackerWorkScreenshot>, String> {
+    let conn = open_db()?;
+    let mut sql = String::from(
+        "SELECT id, session_id, open_session_key, project_id, project_name, client_name,
+                session_date, captured_at, file_name, note, description, sort_order, thumb_name
+         FROM work_screenshots WHERE 1=1",
+    );
+    let mut args: Vec<String> = Vec::new();
+    if !filter.project_id.trim().is_empty() && filter.project_id != "all" {
+        sql.push_str(" AND project_id = ?");
+        args.push(filter.project_id.clone());
+    }
+    if !filter.session_id.trim().is_empty() && filter.session_id != "all" {
+        sql.push_str(" AND session_id = ?");
+        args.push(filter.session_id.clone());
+    }
+    if !filter.date_from.trim().is_empty() {
+        sql.push_str(" AND session_date >= ?");
+        args.push(filter.date_from.clone());
+    }
+    if !filter.date_to.trim().is_empty() {
+        sql.push_str(" AND session_date <= ?");
+        args.push(filter.date_to.clone());
+    }
+    if !filter.client_id.trim().is_empty() && filter.client_id != "all" {
+        sql.push_str(" AND project_id IN (SELECT id FROM projects WHERE client_id = ?)");
+        args.push(filter.client_id.clone());
+    }
+    if !filter.open_session_key.trim().is_empty() {
+        sql.push_str(" AND open_session_key = ?");
+        args.push(filter.open_session_key.clone());
+    }
+    if filter.sort.trim().eq_ignore_ascii_case("time-desc") {
+        sql.push_str(" ORDER BY sort_order ASC, captured_at DESC");
+    } else {
+        sql.push_str(" ORDER BY sort_order ASC, captured_at ASC");
+    }
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(args.iter()), row_to_work_screenshot)
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+pub fn update_work_screenshot_fields(
+    id: &str,
+    description: Option<&str>,
+    note: Option<&str>,
+) -> Result<TrackerWorkScreenshot, String> {
+    let conn = open_db()?;
+    if let Some(desc) = description {
+        conn.execute(
+            "UPDATE work_screenshots SET description = ?1 WHERE id = ?2",
+            params![desc, id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    if let Some(text) = note {
+        conn.execute(
+            "UPDATE work_screenshots SET note = ?1 WHERE id = ?2",
+            params![text, id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, session_id, open_session_key, project_id, project_name, client_name,
+                    session_date, captured_at, file_name, note, description, sort_order, thumb_name
+             FROM work_screenshots WHERE id = ?1",
+        )
+        .map_err(|e| e.to_string())?;
+    stmt.query_row(params![id], row_to_work_screenshot)
+        .map_err(|e| e.to_string())
+}
+
+pub fn update_work_screenshot_note(id: &str, note: &str) -> Result<TrackerWorkScreenshot, String> {
+    update_work_screenshot_fields(id, None, Some(note))
+}
+
+pub fn delete_work_screenshot(id: &str) -> Result<(), String> {
+    let conn = open_db()?;
+    let file_name: Option<String> = conn
+        .query_row(
+            "SELECT file_name FROM work_screenshots WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .ok();
+    let thumb_name: Option<String> = conn
+        .query_row(
+            "SELECT thumb_name FROM work_screenshots WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .ok();
+    conn.execute("DELETE FROM work_screenshots WHERE id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    if let Some(name) = file_name {
+        let path = screenshots_dir()?.join(name);
+        let _ = fs::remove_file(path);
+    }
+    if let Some(name) = thumb_name {
+        if !name.trim().is_empty() {
+            let path = screenshots_dir()?.join(name);
+            let _ = fs::remove_file(path);
+        }
+    }
+    Ok(())
+}
+
+pub fn link_work_screenshots(open_session_key: &str, session_id: &str) -> Result<u32, String> {
+    let conn = open_db()?;
+    let session_project_id: String = conn
+        .query_row(
+            "SELECT IFNULL(project_id, '') FROM time_sessions WHERE id = ?1",
+            params![session_id],
+            |row| row.get(0),
+        )
+        .unwrap_or_default();
+    let n = conn
+        .execute(
+            "UPDATE work_screenshots SET session_id = ?1
+             WHERE open_session_key = ?2
+               AND (session_id = '' OR session_id IS NULL)
+               AND (
+                 IFNULL(project_id, '') = ''
+                 OR ?3 = ''
+                 OR project_id = ?3
+               )",
+            params![session_id, open_session_key, session_project_id],
+        )
+        .map_err(|e| e.to_string())?;
+    if n > 0 || !session_id.trim().is_empty() {
+        sync_work_screenshots_for_session(session_id)?;
+    }
+    Ok(n as u32)
+}
+
+pub fn link_session_screenshot_orphans(session_id: &str, legacy_key: &str) -> Result<u32, String> {
+    if session_id.trim().is_empty() || legacy_key.trim().is_empty() {
+        return Ok(0);
+    }
+    link_work_screenshots(legacy_key, session_id)
+}
+
+pub fn sync_work_screenshots_for_session(session_id: &str) -> Result<u32, String> {
+    if session_id.trim().is_empty() {
+        return Ok(0);
+    }
+    let conn = open_db()?;
+    let row: Option<(String, String, String, String)> = conn
+        .query_row(
+            "SELECT IFNULL(project_id, ''), IFNULL(project_name, ''), IFNULL(client_name, ''), IFNULL(session_date, '')
+             FROM time_sessions WHERE id = ?1",
+            params![session_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .ok();
+    let Some((project_id, project, client, date)) = row else {
+        return Ok(0);
+    };
+    let n = conn
+        .execute(
+            "UPDATE work_screenshots SET
+                project_id = ?1,
+                project_name = ?2,
+                client_name = ?3,
+                session_date = CASE WHEN ?4 != '' THEN ?4 ELSE session_date END
+             WHERE session_id = ?5",
+            params![project_id, project, client, date, session_id],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(n as u32)
+}
+
+pub fn repair_work_screenshot_metadata() -> Result<u32, String> {
+    let conn = open_db()?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT DISTINCT session_id FROM work_screenshots
+             WHERE IFNULL(session_id, '') != ''",
+        )
+        .map_err(|e| e.to_string())?;
+    let ids: Vec<String> = stmt
+        .query_map([], |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    let mut total = 0u32;
+    for id in ids {
+        total += sync_work_screenshots_for_session(&id)?;
+    }
+    Ok(total)
+}
+
+const SCREENSHOT_CTX_KEY: &str = "screenshot_capture_context";
+
+pub fn set_screenshot_capture_context(ctx: &ScreenshotCaptureContext) -> Result<(), String> {
+    let conn = open_db()?;
+    let json = serde_json::to_string(ctx).map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params![SCREENSHOT_CTX_KEY, json],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn get_screenshot_capture_context() -> Result<ScreenshotCaptureContext, String> {
+    let conn = open_db()?;
+    let raw = setting_value(&conn, SCREENSHOT_CTX_KEY);
+    if raw.trim().is_empty() {
+        return Ok(ScreenshotCaptureContext::default());
+    }
+    serde_json::from_str(&raw).map_err(|e| e.to_string())
+}
+
+pub fn clear_screenshot_capture_context() -> Result<(), String> {
+    set_screenshot_capture_context(&ScreenshotCaptureContext::default())
+}
+
+pub fn screenshot_counts_for_sessions(
+    session_ids: &[String],
+) -> Result<std::collections::HashMap<String, u32>, String> {
+    let mut out = std::collections::HashMap::new();
+    if session_ids.is_empty() {
+        return Ok(out);
+    }
+    let conn = open_db()?;
+    let placeholders = session_ids
+        .iter()
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT session_id, COUNT(*) FROM work_screenshots \
+         WHERE session_id IN ({placeholders}) GROUP BY session_id"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(session_ids.iter()), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u32))
+        })
+        .map_err(|e| e.to_string())?;
+    for row in rows {
+        let (id, count) = row.map_err(|e| e.to_string())?;
+        out.insert(id, count);
+    }
+    Ok(out)
+}
+
+pub fn update_work_screenshot_thumb_by_file_name(file_name: &str, thumb_name: &str) -> Result<(), String> {
+    if file_name.trim().is_empty() || thumb_name.trim().is_empty() {
+        return Ok(());
+    }
+    let conn = open_db()?;
+    conn.execute(
+        "UPDATE work_screenshots SET thumb_name = ?1 WHERE file_name = ?2",
+        params![thumb_name, file_name],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn reorder_work_screenshots(ids: &[String]) -> Result<(), String> {
+    let conn = open_db()?;
+    for (index, id) in ids.iter().enumerate() {
+        conn.execute(
+            "UPDATE work_screenshots SET sort_order = ?1 WHERE id = ?2",
+            params![(index + 1) as i32, id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+pub fn count_screenshots_for_session(session_id: &str) -> Result<u32, String> {
+    if session_id.trim().is_empty() {
+        return Ok(0);
+    }
+    let conn = open_db()?;
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM work_screenshots WHERE session_id = ?1",
+            params![session_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(count as u32)
+}
+
+pub fn delete_screenshots_for_session(session_id: &str) -> Result<u32, String> {
+    if session_id.trim().is_empty() {
+        return Ok(0);
+    }
+    let conn = open_db()?;
+    let mut stmt = conn
+        .prepare("SELECT id, file_name, thumb_name FROM work_screenshots WHERE session_id = ?1")
+        .map_err(|e| e.to_string())?;
+    let rows: Vec<(String, String, String)> = stmt
+        .query_map(params![session_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    let dir = screenshots_dir().unwrap_or_default();
+    for (id, file_name, thumb_name) in &rows {
+        conn.execute("DELETE FROM work_screenshots WHERE id = ?1", params![id])
+            .map_err(|e| e.to_string())?;
+        if !file_name.is_empty() {
+            let _ = fs::remove_file(dir.join(file_name));
+        }
+        if !thumb_name.trim().is_empty() {
+            let _ = fs::remove_file(dir.join(thumb_name));
+        }
+    }
+    Ok(rows.len() as u32)
+}
+
+pub fn archive_screenshots_for_session(session_id: &str) -> Result<u32, String> {
+    if session_id.trim().is_empty() {
+        return Ok(0);
+    }
+    let conn = open_db()?;
+    let n = conn
+        .execute(
+            "UPDATE work_screenshots SET session_id = '', open_session_key = ''
+             WHERE session_id = ?1",
+            params![session_id],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(n as u32)
 }
 

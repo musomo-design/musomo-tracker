@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>Version 1.4.2</strong>
+  <strong>Version 1.6.1</strong>
 </p>
 
 <p align="center">
@@ -25,7 +25,15 @@
 
 ---
 
-Musomo Tracker helps you manage clients, projects, and billable time — without cloud accounts or subscriptions. All data stays on your device in a local SQLite database.
+Musomo Tracker helps you manage clients, projects, and billable time — **free and open source** software, without cloud accounts or paid subscriptions. Work screenshots, PDF/Excel reports, and backups are included. Optional voluntary [Ko-fi support](https://ko-fi.com/musomo) helps fund development. All data stays on your device in a local SQLite database.
+
+**License:** [GNU General Public License v3.0 or later (GPL-3.0-or-later)](LICENSE).
+
+## What's new in 1.6.1
+
+- **Fully free** — no PRO plan, trial, or license key; screenshot capture, gallery, and export are always available
+- **Ko-fi reminder** — optional, dismissible support message on Overview (at most once every 30 days)
+- **Same local data** — existing screenshots, sessions, and archives are unchanged
 
 ## What's new in 1.4.2
 
@@ -215,6 +223,10 @@ Full policy: [PRIVACY.md](PRIVACY.md)
 
 ## License
 
-Musomo Tracker is **proprietary software**. Copyright © 2026 Musomo. All rights reserved. See [LICENSE](LICENSE).
+Musomo Tracker is **free and open source** software, copyright © 2026 Stefano Solda / Musomo, distributed under the **[GNU General Public License v3.0 or later (GPL-3.0-or-later)](LICENSE)**.
 
-Third-party open-source components: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Third-party components bundled with or used by the app are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### Brand and trademarks
+
+Musomo Tracker, the name, the logo, and the project’s graphic assets are identifiers of the Musomo project. They are **not** automatically granted for use as trademarks or to represent official derivative releases without separate permission from Musomo.

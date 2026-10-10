@@ -16,6 +16,7 @@
       --bg: #0f1117;
       --panel: #171a21;
       --panel-2: #1c2029;
+      --card: #171a21;
       --text: #e5e7eb;
       --muted: #9ca3af;
       --accent: #22c55e;
@@ -125,6 +126,22 @@
       border-color: var(--accent);
       color: #052e16;
     }
+    .mini__icon-btn {
+      flex: 0 0 36px;
+      width: 36px;
+      padding: 7px 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .mini__icon {
+      width: 16px;
+      height: 16px;
+      display: block;
+      background: currentColor;
+      -webkit-mask: url('./asset/camera.svg') center / contain no-repeat;
+      mask: url('./asset/camera.svg') center / contain no-repeat;
+    }
     .mini__actions button:hover { filter: brightness(1.05); }
     .mini__close {
       -webkit-app-region: no-drag;
@@ -156,6 +173,7 @@
     </div>
     <div class="mini__footer">
       <div class="mini__actions">
+        <button type="button" class="mini__icon-btn" id="btnCamera" data-i18n-title="proScreensCaptureTooltip" title="Capture screenshot" aria-label="Capture screenshot"><span class="mini__icon" aria-hidden="true"></span></button>
         <button type="button" id="btnPause">Pause</button>
         <button type="button" id="btnStop">Stop</button>
         <button type="button" class="primary" id="btnExpand">Main</button>
@@ -163,8 +181,12 @@
       <button type="button" class="mini__close" id="btnCloseMini" data-i18n="closeMiniTimerLink">Close mini timer</button>
     </div>
   </div>
+  <link rel="stylesheet" href="./pro-screenshots.css?v=1.6.1" />
+  <script src="../version.js"></script>
   <script src="../i18n/locales.js"></script>
   <script src="../i18n/runtime.js"></script>
-  <script src="./mini.js?v=1.4.2"></script>
+  <script src="./pro.js?v=1.6.1"></script>
+  <script src="./pro-screenshots.js?v=1.6.1"></script>
+  <script src="./mini.js?v=1.6.1"></script>
 </body>
 </html>

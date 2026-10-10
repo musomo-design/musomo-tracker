@@ -1,11 +1,14 @@
 //! Musomo Tracker — standalone module (cloned from Visual Search Tracker Studio).
 
+mod capture_region;
 mod db;
+mod screenshots;
 mod types;
 
 use types::{
+    CaptureMonitorInfo, CaptureWorkScreenshotRequest, ProStatus, ScreenshotCaptureContext,
     TrackerArchiveEntry, TrackerClient, TrackerModuleSettings, TrackerProject, TrackerSession,
-    TrackerSnapshot, TrackerTask,
+    TrackerSnapshot, TrackerTask, TrackerWorkScreenshot, WorkScreenshotFilter,
 };
 
 /// Primary app window (configured in tauri.conf.json).
@@ -149,6 +152,164 @@ pub fn tracker_save_brand_image(kind: String, data_url: String) -> Result<Tracke
 #[tauri::command]
 pub fn tracker_import_brand_file(kind: String, path: String) -> Result<TrackerModuleSettings, String> {
     db::import_brand_file(kind, path)
+}
+
+#[tauri::command]
+pub fn tracker_is_pro_enabled() -> Result<bool, String> {
+    db::can_use_pro_features()
+}
+
+#[tauri::command]
+pub fn tracker_pro_status() -> Result<ProStatus, String> {
+    db::pro_status()
+}
+
+#[tauri::command]
+pub fn tracker_activate_pro_license(license_key: String) -> Result<bool, String> {
+    db::activate_pro_license(license_key)
+}
+
+#[tauri::command]
+pub fn tracker_reorder_work_screenshots(ids: Vec<String>) -> Result<(), String> {
+    db::reorder_work_screenshots(&ids)
+}
+
+#[tauri::command]
+pub fn tracker_count_session_screenshots(session_id: String) -> Result<u32, String> {
+    db::count_screenshots_for_session(&session_id)
+}
+
+#[tauri::command]
+pub fn tracker_session_screenshots_on_delete(
+    session_id: String,
+    delete_shots: bool,
+) -> Result<u32, String> {
+    if delete_shots {
+        db::delete_screenshots_for_session(&session_id)
+    } else {
+        db::archive_screenshots_for_session(&session_id)
+    }
+}
+
+#[tauri::command]
+pub fn tracker_import_work_screenshots(
+    paths: Vec<String>,
+    req: CaptureWorkScreenshotRequest,
+) -> Result<Vec<TrackerWorkScreenshot>, String> {
+    screenshots::import_work_screenshots(paths, req)
+}
+
+#[tauri::command]
+pub fn tracker_list_capture_monitors() -> Result<Vec<CaptureMonitorInfo>, String> {
+    screenshots::list_capture_monitors()
+}
+
+#[tauri::command]
+pub fn tracker_set_screenshot_capture_context(ctx: ScreenshotCaptureContext) -> Result<(), String> {
+    db::set_screenshot_capture_context(&ctx)
+}
+
+#[tauri::command]
+pub fn tracker_get_screenshot_capture_context() -> Result<ScreenshotCaptureContext, String> {
+    db::get_screenshot_capture_context()
+}
+
+#[tauri::command]
+pub fn tracker_clear_screenshot_capture_context() -> Result<(), String> {
+    db::clear_screenshot_capture_context()
+}
+
+#[tauri::command]
+pub async fn tracker_capture_work_screenshot(
+    app: tauri::AppHandle,
+    req: CaptureWorkScreenshotRequest,
+) -> Result<TrackerWorkScreenshot, String> {
+    tauri::async_runtime::spawn_blocking(move || screenshots::capture_work_screenshot(&app, req))
+        .await
+        .map_err(|e| format!("Screenshot capture failed: {e}"))?
+}
+
+#[tauri::command]
+pub fn tracker_list_work_screenshots(
+    filter: WorkScreenshotFilter,
+) -> Result<Vec<TrackerWorkScreenshot>, String> {
+    screenshots::list_work_screenshots(filter)
+}
+
+#[tauri::command]
+pub fn tracker_update_work_screenshot_note(
+    id: String,
+    note: String,
+) -> Result<TrackerWorkScreenshot, String> {
+    screenshots::update_work_screenshot_note(id, note)
+}
+
+#[tauri::command]
+pub fn tracker_update_work_screenshot(
+    id: String,
+    description: String,
+    note: String,
+) -> Result<TrackerWorkScreenshot, String> {
+    screenshots::update_work_screenshot_fields(
+        id,
+        Some(description),
+        Some(note),
+    )
+}
+
+#[tauri::command]
+pub fn tracker_screenshot_jpeg_data_url(path: String) -> Result<String, String> {
+    screenshots::read_screenshot_jpeg_base64(path)
+}
+
+#[tauri::command]
+pub fn tracker_screenshot_image_data_url(path: String) -> Result<String, String> {
+    screenshots::read_screenshot_image_data_url(path)
+}
+
+#[tauri::command]
+pub fn tracker_screenshot_thumb_data_url(file_path: String, thumb_path: String) -> Result<String, String> {
+    screenshots::read_screenshot_thumb_data_url(file_path, thumb_path)
+}
+
+#[tauri::command]
+pub fn tracker_submit_capture_region(
+    region: capture_region::CaptureRegion,
+) -> Result<(), String> {
+    capture_region::submit_capture_region(region)
+}
+
+#[tauri::command]
+pub fn tracker_cancel_capture_region() -> Result<(), String> {
+    capture_region::cancel_capture_region()
+}
+
+#[tauri::command]
+pub fn tracker_delete_work_screenshot(id: String) -> Result<(), String> {
+    screenshots::delete_work_screenshot(id)
+}
+
+#[tauri::command]
+pub fn tracker_link_work_screenshots(
+    open_session_key: String,
+    session_id: String,
+) -> Result<u32, String> {
+    screenshots::link_work_screenshots(open_session_key, session_id)
+}
+
+#[tauri::command]
+pub fn tracker_link_session_screenshot_orphans(
+    session_id: String,
+    legacy_key: String,
+) -> Result<u32, String> {
+    screenshots::link_session_screenshot_orphans(session_id, legacy_key)
+}
+
+#[tauri::command]
+pub fn tracker_work_screenshot_counts(
+    session_ids: Vec<String>,
+) -> Result<std::collections::HashMap<String, u32>, String> {
+    screenshots::screenshot_counts_for_sessions(session_ids)
 }
 
 fn open_tracker_studio_window(app: &tauri::AppHandle) -> Result<(), String> {

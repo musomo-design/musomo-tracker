@@ -1,8 +1,9 @@
 [package]
 name = "musomo-tracker"
-version = "1.4.2"
+version = "1.6.1"
 description = "Musomo Tracker — time tracking & billing"
 authors = ["Musomo"]
+license = "GPL-3.0-or-later"
 edition = "2021"
 default-run = "musomo-tracker"
 
@@ -22,3 +23,4 @@ dirs = "6"
 image = { version = "0.25", default-features = false, features = ["png", "webp", "jpeg"] }
 base64 = "0.22"
 rusqlite = { version = "0.32", features = ["bundled"] }
+xcap = "0.9.8"

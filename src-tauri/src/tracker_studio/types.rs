@@ -184,6 +184,110 @@ pub struct TrackerArchiveEntry {
     pub created_at: i64,
     #[serde(default)]
     pub is_auto: bool,
+    #[serde(default)]
+    pub includes_screenshots: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackerWorkScreenshot {
+    pub id: String,
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub open_session_key: String,
+    #[serde(default)]
+    pub project_id: String,
+    pub project: String,
+    pub client: String,
+    #[serde(default)]
+    pub date: String,
+    pub captured_at: String,
+    pub file_path: String,
+    #[serde(default)]
+    pub thumb_path: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub note: String,
+    #[serde(default)]
+    pub sort_order: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProStatus {
+    pub licensed: bool,
+    pub trial_days_left: u32,
+    pub can_use: bool,
+    pub trial_expired: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureWorkScreenshotRequest {
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub open_session_key: String,
+    pub project_id: String,
+    pub project: String,
+    pub client: String,
+    #[serde(default)]
+    pub date: String,
+    #[serde(default)]
+    pub capture_mode: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub monitor_index: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureMonitorInfo {
+    pub index: u32,
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkScreenshotFilter {
+    #[serde(default)]
+    pub client_id: String,
+    #[serde(default)]
+    pub project_id: String,
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub date_from: String,
+    #[serde(default)]
+    pub date_to: String,
+    #[serde(default)]
+    pub sort: String,
+    #[serde(default)]
+    pub open_session_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenshotCaptureContext {
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub project_id: String,
+    #[serde(default)]
+    pub project: String,
+    #[serde(default)]
+    pub client: String,
+    #[serde(default)]
+    pub date: String,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub open_session_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

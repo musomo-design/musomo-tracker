@@ -7,8 +7,14 @@ function $(id) {
   return document.getElementById(id);
 }
 
-function tr(key) {
-  return window.MusomoI18n?.t?.(key) ?? key;
+function tr(key, vars) {
+  let s = window.MusomoI18n?.t?.(key) ?? key;
+  if (vars) {
+    for (const [k, v] of Object.entries(vars)) {
+      s = s.split(`{${k}}`).join(String(v));
+    }
+  }
+  return s;
 }
 
 function invoke(cmd, args = {}) {
@@ -52,6 +58,9 @@ const state = {
   project: '',
   client: '',
   projectId: '',
+  day: '',
+  dayStart: '',
+  captureSegmentId: '',
   pollId: null,
   /** Ignore stale Studio echoes briefly after local Pause/Resume/Stop. */
   localHoldUntil: 0,
@@ -121,6 +130,9 @@ function applyStudioState(data) {
   if (data.project != null) state.project = data.project;
   if (data.client != null) state.client = data.client;
   if (data.projectId != null) state.projectId = data.projectId;
+  if (data.day != null) state.day = data.day;
+  if (data.dayStart != null) state.dayStart = data.dayStart;
+  if (data.captureSegmentId != null) state.captureSegmentId = data.captureSegmentId;
 
   return !runtimeActive && hadSession;
 }
@@ -216,6 +228,15 @@ async function quitApp() {
   }
 }
 
+async function captureScreenshotFromMini(anchor) {
+  await syncFromRuntime();
+  if (window.MusomoProScreenshots?.captureFromMini) {
+    await window.MusomoProScreenshots.captureFromMini(anchor || $('btnCamera'));
+    return;
+  }
+  alert(tr('proScreensCaptureFailed', { error: 'Screenshots module not loaded.' }));
+}
+
 async function handleAppExitRequest() {
   if (allowAppExit) {
     await quitApp();
@@ -299,7 +320,7 @@ function bindCloseGuard() {
       if (e.key !== 'Escape') return;
       e.preventDefault();
       e.stopImmediatePropagation();
-      void handleCloseMiniButton();
+      void handleCloseRequest();
     },
     true
   );
@@ -312,19 +333,7 @@ function bindCloseGuard() {
     void win.onCloseRequested(event => {
       if (allowMiniClose) return;
       event.preventDefault();
-      void handleCloseMiniButton();
-    });
-  } catch (_) {
-    /* ignore */
-  }
-}
-
-async function bindMiniChromeEvents() {
-  const listen = window.__TAURI__?.event?.listen;
-  if (typeof listen !== 'function') return;
-  try {
-    await listen('mini-close-requested', () => {
-      void handleCloseMiniButton();
+      void requestCloseMini();
     });
   } catch (_) {
     /* ignore */
@@ -507,6 +516,13 @@ function bindControls() {
     });
   });
 
+  $('btnCamera')?.addEventListener('pointerdown', onButtonPointerDown);
+  $('btnCamera')?.addEventListener('click', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    void captureScreenshotFromMini(e.currentTarget);
+  });
+
   $('btnCloseMini')?.addEventListener('pointerdown', onButtonPointerDown);
   $('btnCloseMini')?.addEventListener('click', e => {
     e.preventDefault();
@@ -527,6 +543,26 @@ void (async () => {
   await window.MusomoI18n?.initLocale?.();
   const closeBtn = $('btnCloseMini');
   if (closeBtn) closeBtn.textContent = tr('closeMiniTimerLink');
+  window.MusomoProScreenshots?.init?.({
+    getState: () => ({
+      timer: {
+        projectId: state.projectId,
+        day: state.day || '',
+        dayStart: state.dayStart || '',
+        captureSegmentId: state.captureSegmentId || '',
+        sessions: []
+      },
+      projects: {
+        items: state.projectId
+          ? [{ id: state.projectId, name: state.project, clientId: '', client: state.client }]
+          : []
+      },
+      clients: { items: [] }
+    }),
+    tr,
+    invoke: (cmd, args) => invoke(cmd, args),
+    todayIsoDate: () => new Date().toISOString().slice(0, 10)
+  });
   bindControls();
   bindStudioEvents();
   bindCloseGuard();

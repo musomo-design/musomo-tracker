@@ -30,6 +30,7 @@ const NAV = [
   { id: 'board', labelKey: 'navBoard', icon: 'board.svg' },
   { id: 'timer', labelKey: 'navTimer', icon: 'time_tracker.svg' },
   { id: 'sessions', labelKey: 'navSessions', icon: 'session.svg' },
+  { id: 'work-screenshots', labelKey: 'navWorkScreenshots', icon: 'camera.svg' },
   { id: 'reports', labelKey: 'navReports', icon: 'report.svg' },
   { id: 'settings', labelKey: 'navSettings', icon: 'setting.svg' }
 ];
@@ -391,7 +392,9 @@ const state = {
     /** True while a Stop/commit is persisting — blocks duplicate saves. */
     committing: false,
     /** Guard against overlapping midnight rollovers. */
-    midnightRolloverInFlight: false
+    midnightRolloverInFlight: false,
+    /** Stable id for linking screenshots captured before Stop. */
+    captureSegmentId: ''
   },
   clients: {
     items: CLIENTS_SEED.map(c => ({ ...c, projects: [...c.projects] })),
@@ -413,6 +416,7 @@ const state = {
     editingId: null,
     movingId: null
   },
+  screenshotCounts: {},
   board: {
     items: TASKS_SEED.map(t => ({ ...t })),
     query: '',
@@ -594,8 +598,12 @@ function formatArchiveOptionLabel(entry) {
   const label = entry?.isAuto
     ? tr('archiveAutoLabel')
     : String(entry?.label || entry?.name || '').trim();
+  const shots =
+    entry?.includesScreenshots ?? entry?.includes_screenshots
+      ? ` · ${tr('archiveIncludesScreenshots')}`
+      : '';
   const when = formatArchiveDateTime(entry?.createdAt ?? entry?.created_at);
-  return when ? `${label} · ${when}` : label;
+  return when ? `${label}${shots} · ${when}` : `${label}${shots}`;
 }
 
 function refreshAfterDateFormatChange() {
@@ -1241,6 +1249,7 @@ function formatClockDisplay(value) {
 
 /** Session worked duration in seconds (durationMin field stores seconds after DB v5). */
 function sessionDurationSec(session) {
+  if (session?.id === OPEN_TIMER_SESSION_ID) return liveTimerSeconds();
   return Math.max(0, Math.floor(Number(session?.durationMin) || 0));
 }
 
@@ -1248,6 +1257,58 @@ function sessionDurationSec(session) {
  * Snapshot + clear the open timer before any await.
  * Pause stays pause; Stop claims once; Start after Stop is a new session.
  */
+function newCaptureSegmentId() {
+  return `cap_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+const OPEN_TIMER_SESSION_ID = '__open_timer__';
+
+function buildOpenTimerSessionContext() {
+  if (!timerHasOpenSession() || !state.timer.dayStart) return null;
+  const { project, client, rate } = getTimerContext();
+  if (!project?.id) return null;
+  const secs = liveTimerSeconds();
+  return {
+    session: {
+      id: OPEN_TIMER_SESSION_ID,
+      projectId: project.id,
+      project: project.name,
+      client: client?.company || project.client || '',
+      date: state.timer.day || todayIsoDate(),
+      start: state.timer.dayStart,
+      end: '',
+      breakMin: Math.max(0, Number(state.timer.pauseAccumSec) || 0),
+      durationMin: secs,
+      rate,
+      cost: computeSessionCost(secs, rate),
+      description: '',
+      isOpenTimer: true
+    },
+    project,
+    client: client || null
+  };
+}
+
+function updateOpenSessionRowInSessions() {
+  if (state.page !== 'sessions') return;
+  const row = document.querySelector(`tr[data-session-id="${OPEN_TIMER_SESSION_ID}"]`);
+  if (!row) return;
+  const ctx = buildOpenTimerSessionContext();
+  if (!ctx) return;
+  const { session, client } = ctx;
+  const sessionCur = client ? currencyForClient(client) : getStudioCurrency();
+  const secs = liveTimerSeconds();
+  const hoursCell = row.querySelector('[data-open-hours]');
+  const costCell = row.querySelector('[data-open-cost]');
+  const statusCell = row.querySelector('[data-open-status]');
+  if (hoursCell) hoursCell.textContent = formatHmsDisplay(secs);
+  if (costCell) costCell.textContent = formatMoney(computeSessionCost(secs, session.rate), sessionCur);
+  if (statusCell) {
+    statusCell.textContent = state.timerRunning ? tr('running') : tr('paused');
+    statusCell.classList.toggle('is-paused', !state.timerRunning);
+  }
+}
+
 function claimOpenTimerWork() {
   if (state.timer.committing) return null;
   freezeLiveTimer();
@@ -1262,11 +1323,17 @@ function claimOpenTimerWork() {
     return null;
   }
   state.timer.committing = true;
+  const timerProjectId = state.timer.projectId || '';
+  const timerCtx = resolveProjectContext(timerProjectId) || getTimerContext();
   const chunk = {
     secs,
     date: state.timer.day || todayIsoDate(),
     start: normalizeClockString(state.timer.dayStart) || clockNow(),
-    breakSec: Math.max(0, Number(state.timer.pauseAccumSec) || 0)
+    breakSec: Math.max(0, Number(state.timer.pauseAccumSec) || 0),
+    captureSegmentId: state.timer.captureSegmentId || '',
+    projectId: timerCtx.project?.id || timerProjectId,
+    project: timerCtx.project?.name || '',
+    client: timerCtx.client?.company || timerCtx.project?.client || ''
   };
   // Clear immediately so a second Stop/mini event cannot re-save the same work.
   state.timerSeconds = 0;
@@ -1274,6 +1341,7 @@ function claimOpenTimerWork() {
   state.timer.pauseStartedAt = null;
   state.timer.pauseAccumSec = 0;
   state.timer.dayStart = '';
+  state.timer.captureSegmentId = '';
   return chunk;
 }
 
@@ -1287,7 +1355,12 @@ async function commitClaimedTimerWork(chunk) {
     return null;
   }
   try {
-    const { project, client, rate } = getTimerContext();
+    const ctx =
+      resolveProjectContext(chunk.projectId, {
+        project: chunk.project,
+        client: chunk.client
+      }) || getTimerContext();
+    const { project, client, rate } = ctx;
     const durationSec = Math.max(1, Math.floor(chunk.secs));
     const breakSec = Math.max(0, Number(chunk.breakSec) || 0);
     const start = normalizeClockString(chunk.start) || clockNow();
@@ -1312,6 +1385,15 @@ async function commitClaimedTimerWork(chunk) {
       },
       { isNew: true }
     );
+    if (saved && window.MusomoProScreenshots?.linkOpenSession) {
+      const legacyKey = window.MusomoProScreenshots.buildOpenSessionKey({
+        projectId: saved.projectId,
+        day: saved.date,
+        dayStart: saved.start
+      });
+      const key = chunk.captureSegmentId || legacyKey;
+      await window.MusomoProScreenshots.linkOpenSession(key, saved.id, legacyKey);
+    }
     return saved;
   } finally {
     state.timer.committing = false;
@@ -1427,13 +1509,15 @@ async function rolloverTimerOneDay() {
   if (!wasRunning) {
     if (totalWorked >= 1) {
       state.timer.committing = true;
+      const rolloverSegmentId = state.timer.captureSegmentId || '';
       try {
         await commitClaimedTimerWork({
           secs: totalWorked,
           date: oldDay,
           start,
           breakSec,
-          end: endClockFromParts(start, totalWorked, breakSec) || '24:00:00'
+          end: endClockFromParts(start, totalWorked, breakSec) || '24:00:00',
+          captureSegmentId: rolloverSegmentId
         });
       } finally {
         state.timer.committing = false;
@@ -1468,18 +1552,22 @@ async function rolloverTimerOneDay() {
 
   if (dur1 >= 1) {
     state.timer.committing = true;
+    const rolloverSegmentId = state.timer.captureSegmentId || '';
     try {
       await commitClaimedTimerWork({
         secs: dur1,
         date: oldDay,
         start,
         breakSec: break1,
-        end: '24:00:00'
+        end: '24:00:00',
+        captureSegmentId: rolloverSegmentId
       });
     } finally {
       state.timer.committing = false;
     }
   }
+
+  state.timer.captureSegmentId = newCaptureSegmentId();
 
   const nextDay = addDaysToIsoDate(oldDay, 1);
   state.timer.day = nextDay;
@@ -1573,6 +1661,47 @@ function clientRateForProject(projectId) {
   const project = state.projects.items.find(p => p.id === projectId);
   const client = state.clients.items.find(c => c.id === project?.clientId);
   return Number(client?.rate ?? state.settings.defaultRate) || 0;
+}
+
+function resolveSessionProjectId(sessionOrPartial) {
+  const base = sessionOrPartial || {};
+  if (base.projectId) return base.projectId;
+  const name = String(base.project || '').trim();
+  if (name) {
+    const byName = state.projects.items.find(p => p.name === name);
+    if (byName) return byName.id;
+  }
+  return state.projects.detailId || state.timer.projectId || '';
+}
+
+function resolveProjectContext(projectId, hints = {}) {
+  const project =
+    (projectId && state.projects.items.find(p => p.id === projectId)) ||
+    (hints.project && state.projects.items.find(p => p.name === hints.project));
+  if (!project) return null;
+  const client =
+    state.clients.items.find(c => c.id === project.clientId) ||
+    (hints.client ? state.clients.items.find(c => c.company === hints.client) : null);
+  const rate = Number(client?.rate ?? state.settings.defaultRate) || 0;
+  return { project, client, rate };
+}
+
+async function alignTimerForScreenshotSession(session) {
+  if (!session?.projectId) return;
+  const targetId = session.projectId;
+  if (state.timer.projectId === targetId) return;
+  const hasOpen =
+    state.timerRunning ||
+    liveTimerSeconds() > 0 ||
+    !!state.timer.dayStart ||
+    !!state.timer.pauseStartedAt;
+  if (hasOpen && state.timer.projectId && state.timer.projectId !== targetId) {
+    await commitTimerSession();
+  }
+  state.timer.projectId = targetId;
+  applyTimerContext();
+  pushTimerStateToMini(true);
+  syncTimerUi();
 }
 
 function normalizeSession(partial) {
@@ -1677,6 +1806,23 @@ async function upsertSessionLocal(session, { isNew = false, previousProjectId = 
 async function removeSessionLocal(id) {
   const existing = state.timer.sessions.find(s => s.id === id);
   const projectId = existing?.projectId || '';
+  let shotCount = 0;
+  try {
+    shotCount = Number(await invoke('tracker_count_session_screenshots', { sessionId: id })) || 0;
+  } catch (_) {
+    shotCount = 0;
+  }
+  if (shotCount > 0) {
+    const deleteShots = confirm(tr('proScreensDeleteWithSession'));
+    try {
+      await invoke('tracker_session_screenshots_on_delete', {
+        sessionId: id,
+        deleteShots
+      });
+    } catch (err) {
+      console.warn('session screenshots cleanup', err);
+    }
+  }
   state.timer.sessions = state.timer.sessions.filter(s => s.id !== id);
   await deleteSessionRecord(id);
   if (projectId) syncProjectStats(projectId);
@@ -1732,7 +1878,8 @@ function renderSessionBlock(period, label) {
               <div class="session-row__actions session-actions">
                 <button type="button" class="btn" data-session-action="edit" data-session-id="${escapeHtml(s.id)}">${tr('edit')}</button>
                 <button type="button" class="btn" data-session-action="move" data-session-id="${escapeHtml(s.id)}">${tr('move')}</button>
-                <button type="button" class="btn" data-session-action="delete" data-session-id="${escapeHtml(s.id)}">${tr('delete')}</button>
+                <button type="button" class="btn" data-session-action="screenshots" data-session-id="${escapeHtml(s.id)}">${escapeHtml(screenshotSessionLabel(s.id))}</button>
+              <button type="button" class="btn" data-session-action="delete" data-session-id="${escapeHtml(s.id)}">${tr('delete')}</button>
               </div>
             </div>
           </div>`
@@ -1752,6 +1899,30 @@ function invoke(cmd, args = {}) {
   const core = window.__TAURI__?.core;
   if (!core?.invoke) return Promise.reject(new Error('Tauri not available'));
   return core.invoke(cmd, args);
+}
+
+function screenshotSessionLabel(sessionId) {
+  const n = Number(state.screenshotCounts?.[sessionId] || 0);
+  const base = tr('proScreensViewSession');
+  return n > 0 ? `${base} (${n})` : base;
+}
+
+async function refreshScreenshotCounts(sessionIds) {
+  const ids = [...new Set((sessionIds || []).filter(Boolean))];
+  if (!ids.length) return;
+  try {
+    const counts = await invoke('tracker_work_screenshot_counts', { sessionIds: ids });
+    state.screenshotCounts = { ...(state.screenshotCounts || {}), ...(counts || {}) };
+  } catch (_) {}
+}
+
+function applyScreenshotCountLabels(root = document) {
+  const scope = root?.querySelectorAll ? root : document;
+  scope.querySelectorAll('[data-session-action="screenshots"]').forEach(btn => {
+    const id = btn.getAttribute('data-session-id');
+    if (!id) return;
+    btn.textContent = screenshotSessionLabel(id);
+  });
 }
 
 function projectsForClient(clientId) {
@@ -1865,6 +2036,7 @@ function applyRuntimeTimerState(runtime) {
   if (runtime.projectId) state.timer.projectId = runtime.projectId;
   state.timer.day = runtime.day || todayIsoDate();
   state.timer.dayStart = runtime.dayStart || '';
+  state.timer.captureSegmentId = runtime.captureSegmentId || '';
   state.timer.pauseAccumSec = Math.max(0, Number(runtime.pauseAccumSec) || 0);
   state.timer.pauseStartedAt = runtime.pauseStartedAt
     ? Number(runtime.pauseStartedAt)
@@ -1889,7 +2061,11 @@ async function restoreTimerRuntime() {
         secs: pc.secs,
         date: pc.date || todayIsoDate(),
         start: pc.start || clockNow(),
-        breakSec: pc.breakSec || 0
+        breakSec: pc.breakSec || 0,
+        captureSegmentId: pc.captureSegmentId || pc.capture_segment_id || '',
+        projectId: pc.projectId || pc.project_id || '',
+        project: pc.project || '',
+        client: pc.client || ''
       });
       await invoke('tracker_clear_timer_pending_commit');
       refreshAfterSessionChange();
@@ -2231,6 +2407,8 @@ function setPage(id) {
         sub.textContent = tr('timerSub', { n: formatMinutes(todayMin) });
       } else if (id === 'sessions') {
         sub.textContent = tr('sessionsSub');
+      } else if (id === 'work-screenshots') {
+        sub.textContent = tr('proScreensSub');
       } else if (id === 'reports') {
         sub.textContent = tr('reportsSub');
       } else if (id === 'settings') {
@@ -2256,7 +2434,13 @@ function setPage(id) {
   if (id === 'board') renderBoard();
   if (id === 'timer') renderTimer();
   if (id === 'sessions') renderSessions();
-  if (id === 'reports') renderReports();
+  if (id === 'work-screenshots') {
+    window.MusomoProIntegration?.onPageOpen?.('work-screenshots');
+  }
+  if (id === 'reports') {
+    renderReports();
+    window.MusomoProIntegration?.onPageOpen?.('reports');
+  }
   if (id === 'settings') renderSettings();
   syncGlobalSearchInput();
 }
@@ -2290,6 +2474,45 @@ function syncGlobalSearchInput() {
   if (input) input.value = pageSearchQuery();
 }
 
+const KOFI_PROMPT_STORAGE_KEY = 'musomo_kofi_support_prompt_at';
+const KOFI_PROMPT_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000;
+const KOFI_URL = 'https://ko-fi.com/musomo';
+
+function shouldShowKofiSupportPrompt() {
+  try {
+    const raw = localStorage.getItem(KOFI_PROMPT_STORAGE_KEY);
+    const last = raw ? Number(raw) : 0;
+    if (!last || Number.isNaN(last)) return true;
+    return Date.now() - last >= KOFI_PROMPT_INTERVAL_MS;
+  } catch (_) {
+    return false;
+  }
+}
+
+function snoozeKofiSupportPrompt() {
+  try {
+    localStorage.setItem(KOFI_PROMPT_STORAGE_KEY, String(Date.now()));
+  } catch (_) {}
+}
+
+function kofiSupportBannerHtml() {
+  if (!shouldShowKofiSupportPrompt()) return '';
+  return `<div class="kofi-banner" id="kofiSupportBanner" role="note">
+    <p class="kofi-banner__text">${escapeHtml(tr('kofiSupportBanner'))}</p>
+    <div class="kofi-banner__actions">
+      <a class="btn btn-primary" href="${KOFI_URL}" target="_blank" rel="noopener noreferrer">${escapeHtml(tr('kofiSupportBannerAction'))}</a>
+      <button type="button" class="btn" id="btnKofiDismiss">${escapeHtml(tr('kofiSupportBannerDismiss'))}</button>
+    </div>
+  </div>`;
+}
+
+function bindKofiSupportBanner(root) {
+  root.querySelector('#btnKofiDismiss')?.addEventListener('click', () => {
+    snoozeKofiSupportPrompt();
+    root.querySelector('#kofiSupportBanner')?.remove();
+  });
+}
+
 function renderOverview() {
   const root = $('page-overview');
   if (!root) return;
@@ -2317,6 +2540,7 @@ function renderOverview() {
   const timerCost = formatMoney(computeSessionCost(liveSecs, rate), timerCur);
 
   root.innerHTML = `
+    ${kofiSupportBannerHtml()}
     <div class="metrics">
       <div class="metric">
         <div class="metric__label">${tr('metricActiveClients')}</div>
@@ -2470,6 +2694,7 @@ function renderOverview() {
     })();
   });
   $('btnOpenMini')?.addEventListener('click', () => void openMini());
+  bindKofiSupportBanner(root);
   root.querySelectorAll('[data-deadline-id]').forEach(btn => {
     btn.addEventListener('click', () => {
       state.projects.detailId = btn.dataset.deadlineId;
@@ -3041,6 +3266,7 @@ function startProjectTimer(project) {
   state.timerRunning = false;
   state.timerRunStartedAt = null;
   stopTick();
+  void window.MusomoProScreenshots?.syncCaptureContextToTimer?.();
   syncTimerUi();
   setPage('timer');
 }
@@ -3097,6 +3323,7 @@ function renderProjectDetail() {
               <button type="button" class="btn" data-session-action="edit" data-session-id="${escapeHtml(s.id)}">${tr('edit')}</button>
               <button type="button" class="btn" data-session-action="move" data-session-id="${escapeHtml(s.id)}">${tr('move')}</button>
               <button type="button" class="btn" data-session-action="duplicate" data-session-id="${escapeHtml(s.id)}">${tr('duplicate')}</button>
+              <button type="button" class="btn" data-session-action="screenshots" data-session-id="${escapeHtml(s.id)}">${escapeHtml(screenshotSessionLabel(s.id))}</button>
               <button type="button" class="btn" data-session-action="delete" data-session-id="${escapeHtml(s.id)}">${tr('delete')}</button>
             </td>
           </tr>`
@@ -3170,6 +3397,7 @@ function renderProjectDetail() {
     setPage('board');
   });
   bindSessionActions(root);
+  void refreshScreenshotCounts(sessions.map(s => s.id)).then(() => applyScreenshotCountLabels(root));
 }
 
 /** Move a session to another project (keeps its own row; no same-day merge). */
@@ -3238,6 +3466,14 @@ function bindSessionActions(root) {
       e.stopPropagation();
       const id = btn.dataset.sessionId;
       const action = btn.dataset.sessionAction;
+      if (id === OPEN_TIMER_SESSION_ID) {
+        if (action === 'screenshots') {
+          window.MusomoProIntegration?.openActiveTimerScreenshots?.();
+        } else if (action === 'timer') {
+          setPage('timer');
+        }
+        return;
+      }
       const session = state.timer.sessions.find(s => s.id === id);
       if (!session) return;
       if (action === 'edit') {
@@ -3258,6 +3494,8 @@ function bindSessionActions(root) {
         if (!confirm('Delete this session?')) return;
         await removeSessionLocal(id);
         refreshAfterSessionChange();
+      } else if (action === 'screenshots') {
+        window.MusomoProIntegration?.openSessionScreenshots?.(id);
       }
     });
   });
@@ -3268,6 +3506,7 @@ function refreshAfterSessionChange() {
   else if (state.page === 'timer') updateTimerSessionsPanel();
   else if (state.page === 'projects') renderProjects();
   else if (state.page === 'sessions') renderSessions();
+  else if (state.page === 'work-screenshots') void window.MusomoProScreenshots?.renderPage?.();
 }
 
 function openSessionEditor(sessionOrDefaults = null) {
@@ -3296,7 +3535,7 @@ function openSessionEditor(sessionOrDefaults = null) {
   }
   $('manualEntryForm')?.reset();
   const base = sessionOrDefaults || {};
-  const projectId = base.projectId || state.projects.detailId || state.timer.projectId;
+  const projectId = resolveSessionProjectId(base);
   if (select && projectId) select.value = projectId;
   if ($('mDate')) $('mDate').value = base.date || todayIsoDate();
   setManualClockField('mStart', normalizeClockString(base.start) || '');
@@ -3785,6 +4024,7 @@ function stopTimer(reset = true) {
       if (reset) {
         state.timerSeconds = 0;
         state.timer.dayStart = '';
+        state.timer.captureSegmentId = '';
         state.timer.pauseAccumSec = 0;
       }
       applyTimerContext();
@@ -3806,7 +4046,12 @@ function timerStart() {
   finalizeOpenPause();
   state.timer.day = today;
   // Start after Stop → new session. Resume after Pause keeps the same dayStart.
-  if (!state.timer.dayStart) state.timer.dayStart = clockNow();
+  if (!state.timer.dayStart) {
+    state.timer.dayStart = clockNow();
+    if (!state.timer.captureSegmentId) state.timer.captureSegmentId = newCaptureSegmentId();
+    void window.MusomoProScreenshots?.syncCaptureContextToTimer?.();
+    pushTimerStateToMini(true);
+  }
   if (!state.timerRunning) {
     state.timerRunning = true;
     state.timerRunStartedAt = Date.now();
@@ -3815,6 +4060,7 @@ function timerStart() {
   }
   syncTimerUi();
   startTick();
+  if (state.page === 'sessions') renderSessions();
 }
 
 function timerResume() {
@@ -3828,6 +4074,7 @@ function timerPause() {
   syncTimerUi();
   stopTick();
   if (timerHasOpenSession()) startPausedWatch();
+  if (state.page === 'sessions') renderSessions();
 }
 
 function updateTimerSessionsPanel() {
@@ -3839,6 +4086,7 @@ function updateTimerSessionsPanel() {
     ${renderSessionBlock('month', tr('thisMonth'))}
   `;
   bindSessionActions(panel);
+  void refreshScreenshotCounts(state.timer.sessions.map(s => s.id)).then(() => applyScreenshotCountLabels(panel));
   const sub = $('pageSub');
   if (sub && state.page === 'timer') {
     sub.textContent = tr('timerSub', { n: formatMinutes(sumSessionMinutes('today')) });
@@ -4034,6 +4282,9 @@ function renderTimer() {
             <span class="timer-ico" style="--ico:url('./asset/stop.svg')" aria-hidden="true"></span>
             <span class="timer-btn-label">${tr('stop')}</span>
           </button>
+          <button type="button" class="btn timer-camera-btn" id="btnTimerCamera" data-i18n-title="proScreensCaptureTooltip" title="${escapeHtml(tr('proScreensCaptureTooltip'))}">
+            <span class="timer-ico timer-ico--camera" aria-hidden="true"></span>
+          </button>
         </div>
         <div class="timer-main__links">
           <button type="button" id="btnTimerMini">
@@ -4077,8 +4328,10 @@ function renderTimer() {
       void commitTimerSession().then(() => {
         state.timer.projectId = nextId;
         state.timer.dayStart = '';
+        state.timer.captureSegmentId = '';
         state.timer.pauseAccumSec = 0;
         state.timer.pauseStartedAt = null;
+        void window.MusomoProScreenshots?.syncCaptureContextToTimer?.();
         applyTimerContext();
         syncTimerUi();
         refreshAfterSessionChange();
@@ -4087,6 +4340,8 @@ function renderTimer() {
     }
     state.timer.projectId = nextId;
     state.timer.dayStart = '';
+    state.timer.captureSegmentId = '';
+    void window.MusomoProScreenshots?.syncCaptureContextToTimer?.();
     applyTimerContext();
     syncTimerUi();
     const metaProject = $('timerMetaProject');
@@ -4102,6 +4357,9 @@ function renderTimer() {
   $('btnTimerPause')?.addEventListener('click', timerPause);
   $('btnTimerResume')?.addEventListener('click', timerResume);
   $('btnTimerStop')?.addEventListener('click', () => stopTimer(true));
+  $('btnTimerCamera')?.addEventListener('click', e => {
+    window.MusomoProIntegration?.captureFromTimer?.(e.currentTarget);
+  });
   $('btnTimerMini')?.addEventListener('click', () => void openMini());
   $('btnTimerCloseMini')?.addEventListener('click', () => void closeMini());
   $('btnManualEntry')?.addEventListener('click', openManualEntryModal);
@@ -4602,42 +4860,52 @@ function sortSessionRows(rows) {
   });
 }
 
+function sessionMatchesViewFilters(ctx, criteria) {
+  const { clientId, projectId, dateFrom, dateTo, query } = criteria;
+  const { session: s, project, client } = ctx;
+  const q = String(query || '').trim().toLowerCase();
+
+  if (clientId !== 'all') {
+    const wantedClient = state.clients.items.find(c => c.id === clientId);
+    if (!wantedClient) return false;
+    const clientMatch =
+      (client && client.id === clientId) || s.client === wantedClient.company;
+    if (!clientMatch) return false;
+  }
+  if (projectId !== 'all') {
+    const wantedProject = state.projects.items.find(p => p.id === projectId);
+    if (!wantedProject) return false;
+    const projectMatch =
+      (project && project.id === projectId) || s.project === wantedProject.name;
+    if (!projectMatch) return false;
+  }
+
+  const iso = String(s.date || '').trim();
+  if (iso && dateFrom && iso < dateFrom) return false;
+  if (iso && dateTo && iso > dateTo) return false;
+
+  if (q) {
+    const clientLabel = client?.company || s.client || '';
+    const projectLabel = project?.name || s.project || '';
+    const hay = [clientLabel, projectLabel, s.description || ''].join(' ').toLowerCase();
+    if (!hay.includes(q)) return false;
+  }
+
+  return true;
+}
+
 /** Filter sessions for the Sessions view (includes orphans; empty dates = no date limit). */
 function filterSessions(criteria = state.sessionsView) {
-  const { clientId, projectId, dateFrom, dateTo, query } = criteria;
-  const q = String(query || '').trim().toLowerCase();
   const rows = [];
+
+  const openCtx = buildOpenTimerSessionContext();
+  if (openCtx && sessionMatchesViewFilters(openCtx, criteria)) {
+    rows.push(openCtx);
+  }
 
   state.timer.sessions.forEach(s => {
     const ctx = resolveSessionContext(s);
-    const { project, client } = ctx;
-
-    if (clientId !== 'all') {
-      const wantedClient = state.clients.items.find(c => c.id === clientId);
-      if (!wantedClient) return;
-      const clientMatch =
-        (client && client.id === clientId) || s.client === wantedClient.company;
-      if (!clientMatch) return;
-    }
-    if (projectId !== 'all') {
-      const wantedProject = state.projects.items.find(p => p.id === projectId);
-      if (!wantedProject) return;
-      const projectMatch =
-        (project && project.id === projectId) || s.project === wantedProject.name;
-      if (!projectMatch) return;
-    }
-
-    const iso = String(s.date || '').trim();
-    if (iso && dateFrom && iso < dateFrom) return;
-    if (iso && dateTo && iso > dateTo) return;
-
-    if (q) {
-      const clientLabel = client?.company || s.client || '';
-      const projectLabel = project?.name || s.project || '';
-      const hay = [clientLabel, projectLabel, s.description || ''].join(' ').toLowerCase();
-      if (!hay.includes(q)) return;
-    }
-
+    if (!sessionMatchesViewFilters(ctx, criteria)) return;
     rows.push(ctx);
   });
 
@@ -4661,7 +4929,12 @@ function computeSessionsSummary(rows) {
   let valueLabel;
   if (currencies.size <= 1) {
     const cur = currencies.size === 1 ? [...currencies][0] : getStudioCurrency();
-    const totalValue = rows.reduce((sum, r) => sum + (Number(r.session.cost) || 0), 0);
+    const totalValue = rows.reduce((sum, r) => {
+      if (r.session.id === OPEN_TIMER_SESSION_ID) {
+        return sum + computeSessionCost(liveTimerSeconds(), r.session.rate);
+      }
+      return sum + (Number(r.session.cost) || 0);
+    }, 0);
     valueLabel = formatMoney(totalValue, cur);
   } else {
     valueLabel = tr('mixedCurrencies');
@@ -4712,6 +4985,24 @@ function renderSessions() {
           const clientLabel = client?.company || s.client || '—';
           const projectLabel = project?.name || s.project || '—';
           const sessionCur = client ? currencyForClient(client) : getStudioCurrency();
+          if (s.id === OPEN_TIMER_SESSION_ID) {
+            const statusKey = state.timerRunning ? 'running' : 'paused';
+            return `<tr data-session-id="${OPEN_TIMER_SESSION_ID}" class="session-row-open">
+            <td>${escapeHtml(s.date ? formatReportDate(s.date) : '—')}</td>
+            <td>${escapeHtml(clientLabel)}</td>
+            <td>${escapeHtml(projectLabel)}</td>
+            <td>${escapeHtml(formatClockDisplay(s.start))}</td>
+            <td><span class="session-open-badge${state.timerRunning ? '' : ' is-paused'}" data-open-status>${escapeHtml(tr(statusKey))}</span></td>
+            <td>${escapeHtml(formatBreakDisplay(s.breakMin))}</td>
+            <td class="num" data-open-hours>${escapeHtml(formatHmsDisplay(liveTimerSeconds()))}</td>
+            <td class="num">${escapeHtml(formatRate(s.rate, sessionCur))}</td>
+            <td class="num" data-open-cost>${escapeHtml(formatMoney(computeSessionCost(liveTimerSeconds(), s.rate), sessionCur))}</td>
+            <td class="session-actions">
+              <button type="button" class="btn" data-session-action="timer" data-session-id="${OPEN_TIMER_SESSION_ID}">${tr('navTimer')}</button>
+              <button type="button" class="btn" data-session-action="screenshots" data-session-id="${OPEN_TIMER_SESSION_ID}">${escapeHtml(screenshotSessionLabel(OPEN_TIMER_SESSION_ID))}</button>
+            </td>
+          </tr>`;
+          }
           return `<tr data-session-id="${escapeHtml(s.id)}">
             <td>${escapeHtml(s.date ? formatReportDate(s.date) : '—')}</td>
             <td>${escapeHtml(clientLabel)}</td>
@@ -4726,6 +5017,7 @@ function renderSessions() {
               <button type="button" class="btn" data-session-action="edit" data-session-id="${escapeHtml(s.id)}">${tr('edit')}</button>
               <button type="button" class="btn" data-session-action="move" data-session-id="${escapeHtml(s.id)}">${tr('move')}</button>
               <button type="button" class="btn" data-session-action="duplicate" data-session-id="${escapeHtml(s.id)}">${tr('duplicate')}</button>
+              <button type="button" class="btn" data-session-action="screenshots" data-session-id="${escapeHtml(s.id)}">${escapeHtml(screenshotSessionLabel(s.id))}</button>
               <button type="button" class="btn" data-session-action="delete" data-session-id="${escapeHtml(s.id)}">${tr('delete')}</button>
             </td>
           </tr>`;
@@ -4841,6 +5133,8 @@ function renderSessions() {
   });
   $('btnSessionsManualEntry')?.addEventListener('click', () => openSessionEditor());
   bindSessionActions(root);
+  void refreshScreenshotCounts(rows.map(r => r.session.id).filter(id => id !== OPEN_TIMER_SESSION_ID))
+    .then(() => applyScreenshotCountLabels(root));
 }
 
 /** Session rows for the single HTML Time & Billing template. */
@@ -6474,7 +6768,7 @@ async function exportReportExcel(opts = {}) {
   return savedPath;
 }
 
-async function exportReport(kind) {
+async function exportReportDefault(kind) {
   try {
     if (kind === 'pdf') {
       const savedPath = await exportReportPdf();
@@ -6488,6 +6782,10 @@ async function exportReport(kind) {
   } catch (err) {
     alert(`Report export failed: ${String(err?.message || err || 'unknown error')}`);
   }
+}
+
+async function exportReport(kind) {
+  return window.MusomoProIntegration?.exportReport?.(kind) ?? exportReportDefault(kind);
 }
 
 async function sendReportByEmail() {
@@ -6996,6 +7294,7 @@ function timerStatePayload() {
     projectId: project?.id || state.timer.projectId || '',
     day: state.timer.day || todayIsoDate(),
     dayStart: state.timer.dayStart || '',
+    captureSegmentId: state.timer.captureSegmentId || '',
     pauseAccumSec: state.timer.pauseAccumSec || 0
   };
 }
@@ -7091,6 +7390,7 @@ function syncTimerUi() {
         projectId: project?.id || state.timer.projectId || '',
         day: state.timer.day || todayIsoDate(),
         dayStart: state.timer.dayStart || '',
+        captureSegmentId: state.timer.captureSegmentId || '',
         pauseAccumSec: state.timer.pauseAccumSec || 0,
         action: pendingAction,
         actionAt: pendingActionAt
@@ -7100,6 +7400,7 @@ function syncTimerUi() {
     /* ignore */
   }
   pushTimerStateToMini(false);
+  updateOpenSessionRowInSessions();
 }
 
 
@@ -7172,6 +7473,7 @@ function resetOpenTimerLocal() {
   state.timer.pauseStartedAt = null;
   state.timer.pauseAccumSec = 0;
   state.timer.dayStart = '';
+  state.timer.captureSegmentId = '';
   stopTick();
   syncTimerUi();
 }
@@ -7248,7 +7550,10 @@ function bindMiniTimerSync() {
         !!state.timer.dayStart ||
         liveTimerSeconds() > 0 ||
         Math.floor(state.timerSeconds || 0) > 0;
-      if (!hasOpen) return;
+      if (!hasOpen) {
+        void restoreTimerRuntime().then(() => refreshAfterSessionChange());
+        return;
+      }
       applyMiniSecondsHint(data.seconds);
       void stopTimer(true).then(async () => {
         pushTimerStateToMini(true);
@@ -7812,6 +8117,39 @@ async function init() {
   renderOverview();
   applyTimerContext();
   await bootstrapTracker();
+  window.MusomoProIntegration?.init?.({
+    tr,
+    invoke,
+    escapeHtml,
+    getState: () => state,
+    formatDisplayDate,
+    formatClockDisplay,
+    todayIsoDate,
+    normalizeClockString,
+    timerHasOpenSession: timerHasOpenSession,
+    syncTimerRuntime: async () => {
+      try {
+        const runtime = await invoke('tracker_get_timer_state');
+        applyRuntimeTimerState(runtime);
+      } catch (_) {}
+    },
+    alignTimerForScreenshotSession,
+    setPage,
+    saveBytesFile,
+    savedFileName,
+    openSavedFile,
+    loadJsPdf,
+    reportBaseName,
+    exportReportPdfDefault: exportReportPdf,
+    exportReportDefault,
+    reportXlsxBytes,
+    zipStore,
+    getReportEntries,
+    renderNav,
+    supportUrl: 'https://ko-fi.com/musomo'
+  });
+  await window.MusomoPro?.init?.();
+  void window.MusomoPro?.refresh?.();
   applyUiTheme(state.settings.uiTheme);
   await restoreTimerRuntime();
   maybeRolloverTimerDay();

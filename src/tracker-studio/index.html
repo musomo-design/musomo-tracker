@@ -504,12 +504,44 @@
     .input-clock[data-clock-empty="1"] {
       color: var(--muted);
     }
+    .input-clock {
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.02em;
+    }
+    .input-clock[data-clock-empty="1"] {
+      color: var(--muted);
+    }
     .kanban-card { touch-action: none; user-select: none; }
     .content {
       flex: 1;
       min-height: 0;
       overflow: auto;
       padding: 12px 28px 20px;
+    }
+    .kofi-banner {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px 16px;
+      margin-bottom: 14px;
+      padding: 12px 16px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border-soft);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+    .kofi-banner__text {
+      margin: 0;
+      flex: 1 1 220px;
+      font-size: 13px;
+      line-height: 1.45;
+      color: var(--muted);
+    }
+    .kofi-banner__actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
     }
     .metrics {
       display: grid;
@@ -1181,6 +1213,72 @@
       line-height: 1.55;
       white-space: pre-line;
     }
+    .modal--wide { width: min(560px, 100%); }
+    .modal--info .modal__body { max-height: 65vh; }
+    .about-modal__body {
+      display: grid;
+      gap: 14px;
+      text-align: center;
+    }
+    .about-tagline {
+      margin: 0;
+      color: var(--muted);
+      font-size: var(--text-body-size);
+      line-height: 1.5;
+    }
+    .about-publisher {
+      margin: 0;
+      font-size: var(--text-label-size);
+      font-weight: var(--font-weight-medium);
+      color: var(--text);
+    }
+    .about-links, .help-links {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 8px 14px;
+      margin-top: 4px;
+    }
+    .link-btn {
+      border: none;
+      background: none;
+      padding: 0;
+      color: var(--blue);
+      font-size: var(--text-body-size);
+      font-weight: var(--font-weight-medium);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .link-btn:hover { filter: brightness(0.85); }
+    .help-section { display: grid; gap: 6px; }
+    .help-section + .help-section { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-soft); }
+    .help-section h3 {
+      margin: 0;
+      font-size: var(--text-label-size);
+      font-weight: var(--font-weight-bold);
+      color: var(--text);
+    }
+    .help-section p {
+      margin: 0;
+      color: var(--muted);
+      font-size: var(--text-body-size);
+      line-height: 1.5;
+    }
+    .about-modal__foot {
+      justify-content: space-between;
+      align-items: center;
+    }
+    .about-modal__foot span {
+      font-size: var(--text-meta-size);
+      color: var(--muted);
+    }
+    .privacy-body {
+      margin: 0;
+      color: var(--muted);
+      font-size: var(--text-body-size);
+      line-height: 1.55;
+      white-space: pre-line;
+    }
     @media (max-width: 1200px) {
       .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .grid, .bottom-grid { grid-template-columns: 1fr; }
@@ -1266,6 +1364,18 @@
     }
     .session-table .num { text-align: right; font-variant-numeric: tabular-nums; }
     .session-table .empty-cell { color: var(--muted); text-align: center; padding: 24px; }
+    .session-table tr.session-row-open {
+      background: color-mix(in srgb, var(--accent) 8%, transparent);
+    }
+    .session-open-badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+    .session-open-badge.is-paused { color: var(--paused, #fbbf24); }
     .session-actions { display: flex; flex-wrap: wrap; gap: 4px; }
     .session-actions .btn,
     .session-table .session-actions .btn {
@@ -1438,6 +1548,14 @@
       padding: 7px 10px;
       color: var(--text);
       font-size: var(--text-label-size);
+    }
+    .board-hint {
+      margin: 0;
+      padding: 0 16px 12px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      border-bottom: 1px solid var(--border-soft);
     }
     .board-hint {
       margin: 0;
@@ -2115,6 +2233,18 @@
       line-height: 1.45;
       color: var(--muted);
     }
+    .report-preview-host .report-header__brand {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 0;
+      max-width: 280px;
+    }
+    .report-preview-host .report-header__note {
+      font-size: var(--text-meta-size);
+      line-height: 1.45;
+      color: var(--muted);
+    }
     .report-preview-host .logo-box {
       width: auto;
       max-width: 200px;
@@ -2386,6 +2516,11 @@
       background: var(--accent-soft);
       color: #fff;
     }
+    html[data-ui-theme="dark"] .quick button.accent,
+    html[data-ui-theme="dark"] .quick button.accent:hover {
+      background: var(--accent-soft);
+      color: #fff;
+    }
     html[data-ui-theme="dark"] .row-actions button:hover { border-color: #3f4a5c; }
     html[data-ui-theme="dark"] .timer-ring {
       background:
@@ -2414,6 +2549,44 @@
     }
     html[data-ui-theme="dark"] .settings-badge {
       background: #252b36;
+    }
+    html[data-ui-theme="dark"] .timer-project-picker {
+      background: var(--mini-bg);
+      border-color: var(--mini-border);
+      box-shadow: none;
+    }
+    html[data-ui-theme="dark"] .timer-project-picker select {
+      color: var(--mini-text);
+    }
+    html[data-ui-theme="dark"] .timer-project-picker__chevron {
+      color: var(--mini-muted);
+    }
+    html[data-ui-theme="dark"] .timer-main__select-label {
+      color: var(--mini-muted);
+    }
+    html[data-ui-theme="dark"] .session-table th {
+      background: var(--mini-bg);
+      color: var(--mini-text);
+      border-bottom-color: var(--mini-border);
+    }
+    html[data-ui-theme="dark"] .session-table th.num {
+      color: #86efac;
+    }
+    html[data-ui-theme="dark"] .project-detail__stats div {
+      background: var(--mini-bg);
+      border-color: var(--mini-border);
+    }
+    html[data-ui-theme="dark"] .project-detail__stats span {
+      color: var(--mini-muted);
+    }
+    html[data-ui-theme="dark"] .project-detail__stats strong {
+      color: var(--mini-text);
+    }
+    html[data-ui-theme="dark"] .project-detail__hero .project-card__bar {
+      background: var(--panel-2);
+    }
+    html[data-ui-theme="dark"] .session-table tbody tr:hover {
+      background: var(--panel-2);
     }
     html[data-ui-theme="dark"] .timer-project-picker {
       background: var(--mini-bg);
@@ -2533,7 +2706,7 @@
           ·
           <button type="button" id="btnAbout" data-i18n="about">About</button>
         </span>
-        <span id="appVersionBadge">v1.4.2</span>
+        <span id="appVersionBadge">v1.6.1</span>
       </div>
     </aside>
 
@@ -2571,6 +2744,7 @@
         <div class="page" id="page-board" data-page="board"></div>
         <div class="page" id="page-timer" data-page="timer"></div>
         <div class="page" id="page-sessions" data-page="sessions"></div>
+        <div class="page" id="page-work-screenshots" data-page="work-screenshots"></div>
         <div class="page" id="page-reports" data-page="reports"></div>
         <div class="page" id="page-settings" data-page="settings"></div>
         <div class="footer-note" data-i18n="localDataNote">All data is stored locally on your device.</div>
@@ -2703,6 +2877,19 @@
         <button type="button" class="btn" id="projectModalCancel">Cancel</button>
         <button type="button" class="btn btn-primary" id="projectModalSave">Add project</button>
       </div>
+      </div>
+    </div>
+  </div>
+  <div class="modal-backdrop" id="completeProjectModal" hidden>
+    <div class="modal" role="dialog" aria-labelledby="completeProjectModalTitle">
+      <div class="modal__head">
+        <h2 id="completeProjectModalTitle">Complete project?</h2>
+        <p id="completeProjectModalBody"></p>
+      </div>
+      <div class="modal__foot">
+        <button type="button" class="btn" id="completeProjectCancel">Cancel</button>
+        <button type="button" class="btn" id="completeProjectKeep">Leave tasks as they are</button>
+        <button type="button" class="btn btn-primary" id="completeProjectMove">Move all tasks to Completed</button>
       </div>
     </div>
   </div>
@@ -2893,9 +3080,13 @@
       </div>
     </div>
   </div>
+  <link rel="stylesheet" href="./pro-screenshots.css?v=1.6.1" />
   <script src="../version.js"></script>
   <script src="../i18n/locales.js"></script>
   <script src="../i18n/runtime.js"></script>
-  <script src="./app.js?v=1.4.2"></script>
+  <script src="./pro.js?v=1.6.1"></script>
+  <script src="./pro-screenshots.js?v=1.6.1"></script>
+  <script src="./pro-integration.js?v=1.6.1"></script>
+  <script src="./app.js?v=1.6.1"></script>
 </body>
 </html>

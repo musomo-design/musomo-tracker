@@ -14,6 +14,8 @@ pub struct TimerPendingCommit {
     pub project_id: String,
     pub project: String,
     pub client: String,
+    #[serde(default)]
+    pub capture_segment_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -28,6 +30,8 @@ pub struct TimerRuntimeState {
     pub project_id: String,
     pub day: String,
     pub day_start: String,
+    #[serde(default)]
+    pub capture_segment_id: String,
     pub pause_accum_sec: i64,
     pub pause_started_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -48,6 +52,10 @@ impl TimerRuntimeStore {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0)
+    }
+
+    fn new_capture_segment_id(now_ms: i64) -> String {
+        format!("cap_{now_ms}_{}", (now_ms % 9973) + 1009)
     }
 
     fn persist(state: &TimerRuntimeState) {
@@ -163,15 +171,26 @@ impl TimerRuntimeStore {
         if let Some(v) = value.get("dayStart").and_then(|v| v.as_str()) {
             state.day_start = v.to_string();
         }
+        if let Some(v) = value.get("captureSegmentId").and_then(|v| v.as_str()) {
+            state.capture_segment_id = v.to_string();
+        }
         if let Some(v) = value.get("pauseAccumSec").and_then(|v| v.as_i64()) {
             state.pause_accum_sec = v;
         }
         if let Some(v) = value.get("pauseStartedAt") {
             state.pause_started_at = v.as_i64();
         }
-        // Studio cleared the open timer after Stop — drop backup commit.
+        // Studio cleared the open timer after Stop — drop backup commit only when empty.
         if !state.running && state.base_seconds == 0 && state.day_start.is_empty() {
-            state.pending_commit = None;
+            let pending_secs = state
+                .pending_commit
+                .as_ref()
+                .map(|pending| pending.secs)
+                .unwrap_or(0);
+            if pending_secs <= 0 {
+                state.pending_commit = None;
+                state.capture_segment_id.clear();
+            }
         }
         Self::persist(&state);
         Self::broadcast(app, &state);
@@ -206,6 +225,9 @@ impl TimerRuntimeStore {
                 state.seconds = secs;
                 state.running = true;
                 state.run_started_at = Some(now);
+                if state.capture_segment_id.is_empty() && !state.day_start.is_empty() {
+                    state.capture_segment_id = Self::new_capture_segment_id(now);
+                }
             }
             "stop" => {
                 if secs > 0 {
@@ -217,6 +239,7 @@ impl TimerRuntimeStore {
                         project_id: state.project_id.clone(),
                         project: state.project.clone(),
                         client: state.client.clone(),
+                        capture_segment_id: state.capture_segment_id.clone(),
                     });
                 }
                 state.running = false;
@@ -226,6 +249,7 @@ impl TimerRuntimeStore {
                 state.pause_started_at = None;
                 state.pause_accum_sec = 0;
                 state.day_start.clear();
+                state.capture_segment_id.clear();
             }
             "discard" => {
                 *state = TimerRuntimeState::default();

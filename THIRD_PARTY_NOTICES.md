@@ -4,7 +4,7 @@ Musomo Tracker includes third-party software components. Each component is
 governed by its own license. This file summarizes the principal components
 **distributed with or bundled into** the application.
 
-Musomo Tracker itself is proprietary software. See [LICENSE](LICENSE).
+Musomo Tracker is distributed under **GPL-3.0-or-later**. See [LICENSE](LICENSE).
 
 License information for Rust dependencies was verified with `cargo license`
 (2026-03-23). JavaScript vendor libraries were verified from bundled file headers.
