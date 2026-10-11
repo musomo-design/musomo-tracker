@@ -19,6 +19,7 @@
 
 <p align="center">
   <a href="https://tracker.musomo.net/">Website</a> ·
+  <a href="https://github.com/musomo-design/musomo-tracker/releases">GitHub Releases</a> ·
   <a href="https://ko-fi.com/musomo">Support Musomo</a> ·
   <a href="https://github.com/musomo-design/musomo-tracker">Repository</a>
 </p>
@@ -31,9 +32,12 @@ Musomo Tracker helps you manage clients, projects, and billable time — **free 
 
 ## What's new in 1.6.1
 
-- **Fully free** — no PRO plan, trial, or license key; screenshot capture, gallery, and export are always available
+- **Free & open source** — Musomo Tracker is **GPL-3.0-or-later**; no PRO plan, trial, or license key
+- **Work Screenshots** — capture **full screen** or the **active window** while you track time; gallery, notes, session linking, import, and dedicated PDF/Excel export
+- **Mini Timer** — capture screenshots from the compact window without restoring the main app (macOS)
+- **Backups & archives** — manual and automatic backups include screenshot files when present
 - **Ko-fi reminder** — optional, dismissible support message on Overview (at most once every 30 days)
-- **Same local data** — existing screenshots, sessions, and archives are unchanged
+- **Reports UI** — PDF export dialog with sticky actions at the top for quicker export
 
 ## What's new in 1.4.2
 
@@ -80,7 +84,8 @@ Musomo Tracker helps you manage clients, projects, and billable time — **free 
 - **Projects** — status, deadlines, progress, detail view with tasks
 - **Board** — kanban columns with drag-and-drop
 - **Time Tracker** — Start, Pause, Stop with break tracking
-- **Mini Timer** — compact always-on-top window synced with the main app
+- **Mini Timer** — compact always-on-top window synced with the main app (capture shortcuts on macOS)
+- **Work Screenshots** — document work visually: capture, gallery, filters, notes, link to sessions, separate screenshots PDF, Excel ZIP references; included in backup/restore when present
 - **Sessions management** — filter, edit, duplicate, move; hourly rate per session
 - **Reports PDF / Excel** — Time & Billing reports with HTML preview and export
 - **Local-first / SQLite** — no server, no account required
@@ -132,7 +137,13 @@ Time & Billing reports with filters. Export **PDF** or **Excel**. On macOS, Send
   <img src="docs/images/mini-timer.png" alt="Musomo Tracker Mini Timer" width="480" />
 </p>
 
-Always-on-top window for tracking time while working in other apps. Stays in sync with the main application.
+Always-on-top window for tracking time while working in other apps. Stays in sync with the main application. On macOS you can capture screenshots from the mini window while the main app stays minimized.
+
+## Work Screenshots
+
+Capture **full screen** or the **active window** during tracked work. Screenshots appear in a dedicated gallery with filters, notes, and links to clients, projects, and sessions. Export a separate screenshots PDF or include references in Excel reports. Backups and archive restore can include screenshot files stored locally alongside your database.
+
+On macOS, grant **Screen Recording** for Musomo Tracker in **System Settings → Privacy & Security** when prompted.
 
 ---
 
@@ -140,14 +151,24 @@ Always-on-top window for tracking time while working in other apps. Stays in syn
 
 | Platform | Status |
 |----------|--------|
-| **macOS** | Primary target (10.13+). Release builds available as signed & notarized `.app` / `.dmg`. |
-| **Windows** | Tauri target configured; **not yet verified**. |
+| **macOS Apple Silicon (arm64)** | Supported (10.13+). Official releases: **Developer ID signed** and **Apple notarized** `.dmg`. |
+| **macOS Intel (x86_64)** | Supported (10.13+). Same signing and notarization as Apple Silicon builds. |
+| **Windows (x64)** | Supported via **NSIS installer** from [GitHub Releases](https://github.com/musomo-design/musomo-tracker/releases) (unsigned; SmartScreen may warn on first run). |
 
-## Installation (macOS)
+## Installation
 
-1. Download the release from [GitHub Releases](https://github.com/musomo-design/musomo-tracker/releases) or [tracker.musomo.net/#download](https://tracker.musomo.net/#download)
-2. Open the DMG and drag **Musomo Tracker** to Applications
-3. Launch the app — demo data loads on first run (replaceable in Settings)
+### macOS
+
+1. Download the latest release from [GitHub Releases](https://github.com/musomo-design/musomo-tracker/releases) or [tracker.musomo.net/#download](https://tracker.musomo.net/#download)
+2. Choose the DMG for your Mac (**Apple Silicon** or **Intel**)
+3. Open the DMG and drag **Musomo Tracker** to Applications
+4. Launch the app — demo data loads on first run (replaceable in Settings)
+
+### Windows
+
+1. Download the latest **x64-setup.exe** from [GitHub Releases](https://github.com/musomo-design/musomo-tracker/releases) or [tracker.musomo.net/#download](https://tracker.musomo.net/#download)
+2. Run the installer and follow the prompts
+3. Launch **Musomo Tracker** from the Start menu
 
 No internet connection required after installation.
 
@@ -191,7 +212,7 @@ Release artifacts can be staged with:
 
 ```bash
 bash scripts/stage-dist.sh
-# Output: dist/v1.4.2/
+# Output: dist/v1.6.1/
 ```
 
 Signed and notarized macOS builds run via GitHub Actions (`.github/workflows/macos-build-notarize.yml`).
@@ -207,6 +228,7 @@ English, Italiano, Español, Français, Deutsch — system default or override i
 
 - **Official website:** https://tracker.musomo.net/
 - **Downloads:** https://tracker.musomo.net/#download
+- **GitHub Releases:** https://github.com/musomo-design/musomo-tracker/releases
 - **Support Musomo:** https://ko-fi.com/musomo
 - **Repository:** https://github.com/musomo-design/musomo-tracker
 
